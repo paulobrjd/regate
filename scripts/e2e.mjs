@@ -29,23 +29,20 @@ await page.goto(url);
 await page.waitForTimeout(1500);
 await page.locator('#game').screenshot({ path: join(out, '0-menu.png') });
 
-// course rapide : 4 IA, réglage auto, le joueur est piloté par l'IA pour finir la course
-await page.check('#autoChk');
+// course rapide (banane) : 4 IA ; le bateau du joueur est confié à une IA pour boucler la course
+await page.selectOption('#course', 'banane');
+await page.selectOption('#met', '2');
 await page.click('#goBtn');
-await page.evaluate(() => {
-  const R = window.__regate, g = R.app.g;
-  // pilote automatique du joueur : on lui greffe une IA de niveau champion
-  g.me.ai = { skill: 1, corr: 30, early: 0.5, home: g.me.x, dir: 1, err: 0 };
-});
+await page.evaluate(() => window.__regate.autopilot());
 const shots = [['pov', '1-cockpit'], ['chase', '2-poursuite'], ['top', '3-ciel']];
 const t0 = Date.now();
 let i = 0;
 while ((Date.now() - t0) / 1000 < SECONDES) {
   const [v, name] = shots[i % shots.length];
   // la machine de test rend sans GPU (lent) : on avance la course pour couvrir ~2 min de régate
-  await page.evaluate(v => { window.__regate.setView(v); window.__regate.advance(13); }, v);
+  await page.evaluate(v => { window.__regate.setView(v); window.__regate.advance(90); }, v);
   await page.waitForTimeout(Math.max(1000, (SECONDES * 1000) / 9));
-  const st = await page.evaluate(() => { const g = window.__regate.app.g; return { t: g.t.toFixed(1), leg: g.me.leg, v: g.me.v.toFixed(1), fin: g.me.fin }; });
+  const st = await page.evaluate(() => { const g = window.__regate.app.g; return { t: g.t.toFixed(1), leg: g.me.leg, v: (g.me.v / 0.514444).toFixed(1), fin: g.me.fin }; });
   console.log(`[${name}] chrono ${st.t}s, bord ${st.leg}, ${st.v} nds${st.fin != null ? ', arrivé' : ''}`);
   await page.locator('#game').screenshot({ path: join(out, `${name}-${Math.floor(i / 3)}.png`) });
   i++;

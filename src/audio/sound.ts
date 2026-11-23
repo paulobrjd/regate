@@ -33,6 +33,9 @@ export function sfx(s: Sfx): void {
     case 'finish': beep(880, 0.5, 0.06); break;
     case 'capsize': beep(120, 0.6, 0.05); break;
     case 'gybeWild': beep(100, 0.6, 0.06); break;
+    case 'mark': beep(990, 0.2, 0.05); break;
+    case 'winch': for (let i = 0; i < 4; i++) setTimeout(() => beep(1800 + i * 90, 0.03, 0.02), i * 70); break;
+    case 'ground': beep(60, 0.8, 0.08); break;
   }
 }
 
@@ -60,9 +63,11 @@ export function updSound(g: Game | null, rt: number): void {
   if (!SND || !AC || !g) return;
   const me = g.me, on = app.soundOn && !g.demo && document.visibilityState !== 'hidden', tt = AC.currentTime;
   const aws = me.aws || 12;
-  SND.wind.g.gain.setTargetAtTime(on ? clamp(aws / 26, 0, 1) * 0.07 : 0, tt, 0.4);
-  SND.wind.fl.frequency.setTargetAtTime(450 + aws * 28, tt, 0.6);
-  SND.water.g.gain.setTargetAtTime(on ? clamp(me.v / 7, 0, 1.2) * 0.11 : 0, tt, 0.3);
-  const lu = on && me.cap <= 0 && (Math.abs(me.twa) < 32 * D || me.sheet - (me.opt0 ?? 0.4) > 0.13);
+  SND.wind.g.gain.setTargetAtTime(on ? clamp(aws / 35, 0, 1) * 0.07 : 0, tt, 0.4);
+  SND.wind.fl.frequency.setTargetAtTime(450 + aws * 22, tt, 0.6);
+  // eau : plus fort et plus aigu quand le bateau vole sur son foil
+  SND.water.g.gain.setTargetAtTime(on ? clamp(me.v / 12, 0, 1.2) * 0.11 : 0, tt, 0.3);
+  SND.water.fl.frequency.setTargetAtTime(300 + me.v * 40 + me.foilLift / 300, tt, 0.5);
+  const lu = on && me.knock <= 0 && (Math.abs(me.awa) < 18 * D || me.mainSheet - me.ideal.mainSheet > 0.15 || me.headSheet - me.ideal.headSheet > 0.18);
   SND.flap.g.gain.setTargetAtTime(lu ? (0.5 + 0.5 * Math.sin(rt * 60)) * 0.07 : 0, tt, 0.015);
 }

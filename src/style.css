@@ -69,3 +69,19 @@ label.chk input{width:20px;height:20px;min-height:0;accent-color:var(--buoy)}
 .keys b{color:var(--ink)}
 @media(max-width:1000px){.hud{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:760px){.hud{grid-template-columns:repeat(2,minmax(0,1fr))}.pad kbd{display:none}.st b{font-size:24px}}
+/* --- IMOCA : tableau de bord et commandes --- */
+.hud{grid-template-columns:repeat(5,minmax(0,1fr))}
+.gauge u{transition:left .1s}
+.cmds{display:flex;flex-wrap:wrap;gap:10px 16px;flex:1 1 420px}
+.grp{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.grp small{width:100%;color:var(--muted);font-size:13px}
+.cmds button,.pad button{background:var(--card);border-color:var(--line);padding:4px 12px;user-select:none;-webkit-user-select:none;touch-action:none}
+.cmds button.on{border-color:var(--buoy);background:var(--buoy);color:#fff}
+.cmds kbd{font:600 12px Barlow,sans-serif;color:var(--muted);display:block}
+.cmds button.on kbd{color:#fff}
+.pad{grid-template-columns:repeat(2,minmax(110px,auto))}
+details.keys{flex:1 1 100%}
+details.keys summary{cursor:pointer;font-weight:600;color:var(--ink);margin-bottom:8px}
+@media(max-width:1000px){.hud{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.hud{grid-template-columns:repeat(2,minmax(0,1fr))}.cmds kbd{display:none}}
+.box{padding:18px 22px}.box h2{margin-bottom:2px}.box .row{margin-bottom:10px}.tabs{margin-bottom:10px}#courseDesc{margin:-4px 0 8px}

@@ -1,53 +1,77 @@
-// Point d'entrée : menus, entrées clavier/tactile, boucle à pas fixe (60 Hz) + rendu interpolé.
+// Point d'entrée : menus, entrées clavier/tactile, boucle à pas fixe (60 Hz) + rendu interpolé, accélération du temps.
 import './style.css';
 import { fmt, ord } from './util/math';
-import { Game, PRE, STEP, type Input } from './game/game';
-import { Canvas2D } from './render/canvas2d';
+import { Game, PRE, STEP, TIME_SCALES, type Command } from './game/game';
+import { COURSES } from './game/course';
+import { ASSISTS } from './game/assist';
+import { Canvas2D, ZOOMS } from './render/canvas2d';
 import { Scene3D } from './render/scene3d';
 import { snapshot } from './render/snapshot';
 import { $, updateHud } from './ui/hud';
 import { unlockAudio, sfx, boom, updSound } from './audio/sound';
 import { app, type View } from './app';
+import type { BoatInput } from './physics/boat';
+import { LEVELS, mkAI } from './ai/bot';
+import { newMem } from './game/assist';
+import { makeRng } from './util/math';
 
-const K: Input = { left: false, right: false, up: false, down: false, auto: false };
+type Hold = 'left' | 'right' | 'mainIn' | 'mainOut' | 'headIn' | 'headOut' | 'travUp' | 'travDown';
+const K: Record<Hold, boolean> = { left: false, right: false, mainIn: false, mainOut: false, headIn: false, headOut: false, travUp: false, travDown: false };
 const c2d = new Canvas2D($<HTMLCanvasElement>('c'));
 let R3: Scene3D | null = null;
-
-try { app.best = parseFloat(localStorage.getItem('regate-best') || '') || null; } catch { /* */ }
+let paused = false;
+const bests: Record<string, number> = (() => { try { return JSON.parse(localStorage.getItem('regate-bests') || '{}'); } catch { return {}; } })();
 
 function fit(): void { c2d.fit(); if (R3) R3.resize(c2d.VW, c2d.VH); }
 new ResizeObserver(fit).observe(c2d.cv);
 
+// ---------- menus ----------
+const sel = (id: string) => $<HTMLSelectElement>(id);
+sel('course').innerHTML = COURSES.map(c => `<option value="${c.id}">${c.name} · ${c.nm.toFixed(1).replace('.', ',')} milles</option>`).join('');
+sel('assist').innerHTML = Object.entries(ASSISTS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+const prefs = (() => { try { return JSON.parse(localStorage.getItem('regate-prefs') || '{}'); } catch { return {}; } })();
+for (const k of ['course', 'met', 'nBots', 'lvl', 'assist']) if (prefs[k] != null) sel(k).value = prefs[k];
+if (!prefs.assist) sel('assist').value = 'equipier';
+const descCourse = () => { const c = COURSES.find(x => x.id === sel('course').value)!; $('courseDesc').textContent = c.desc + (bests[c.id] ? ' Ton record : ' + fmt(bests[c.id]) + '.' : ''); };
+sel('course').addEventListener('change', descCourse); descCourse();
+
 // ---------- partie ----------
 function start(g: Game): void {
-  app.g = g;
-  g.onSfx = sfx;
-  g.onFinish = finishMe;
-  c2d.resetCam(g.me.x, g.me.y - 80);
-  acc = 0;
+  app.g = g; g.onSfx = sfx; g.onFinish = finishMe;
+  c2d.resetCam(g.me.x, g.me.y - 80); acc = 0; paused = false;
 }
-function demo(): void { start(new Game({ mode: 'solo', demo: true, bots: 4, lvl: 2, startT: PRE - 2 })); }
+function demo(): void {
+  const c = COURSES[Math.floor(Math.random() * 3)].id;
+  start(new Game({ mode: 'solo', demo: true, bots: 4, lvl: 2, course: c, startT: 20 }));
+}
 function startSolo(): void {
   unlockAudio();
-  start(new Game({ mode: 'solo', bots: +$<HTMLSelectElement>('nBots').value, lvl: +$<HTMLSelectElement>('lvl').value, met: +$<HTMLSelectElement>('met').value }));
-  $('ovStart').hidden = true; $('ovEnd').hidden = true;
+  const p = { course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value };
+  try { localStorage.setItem('regate-prefs', JSON.stringify(p)); } catch { /* */ }
+  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, course: p.course, assist: ASSISTS[p.assist].a }));
+  $('ovStart').hidden = true; $('ovEnd').hidden = true; $('resumeBtn').hidden = true;
 }
-function menu(): void { $('ovEnd').hidden = true; $('ovStart').hidden = false; demo(); }
+function menu(): void {
+  $('ovEnd').hidden = true; $('ovStart').hidden = false;
+  const g = app.g;
+  if (g && !g.demo && g.me.fin == null) { paused = true; $('resumeBtn').hidden = false; }
+  else { demo(); $('resumeBtn').hidden = true; }
+  descCourse();
+}
+function resume(): void { paused = false; $('ovStart').hidden = true; $('resumeBtn').hidden = true; }
 
 function finishMe(): void {
   const g = app.g;
-  setTimeout(() => { if (!app.g || app.g !== g || g.demo || g.me.fin == null) return; showEnd(g); }, 1100);
+  setTimeout(() => { if (!app.g || app.g !== g || g.demo || g.me.fin == null) return; showEnd(g); }, 1500);
 }
 function showEnd(g: Game): void {
-  const t = g.me.fin!, st = g.standings(), pos = st.findIndex(e => e.me) + 1;
+  const t = g.me.fin!, st = g.standings(), pos = st.findIndex(e => e.me) + 1, id = g.course.id;
   $('endTitle').textContent = pos === 1 && st.length > 1 ? 'Victoire !' : 'Arrivée !';
   $('endTime').textContent = fmt(t);
-  let line = st.length > 1 ? ord(pos) + ' sur ' + st.length + '. ' : '';
-  if (g.mode === 'solo') {
-    const best = app.best, rec = best === null || t < best;
-    line += rec ? (best === null ? 'Premier temps enregistré.' : 'Nouveau record ! Ancien : ' + fmt(best)) : 'Ton record : ' + fmt(best!);
-    if (rec) { app.best = t; try { localStorage.setItem('regate-best', String(t)); } catch { /* */ } }
-  }
+  let line = (st.length > 1 ? ord(pos) + ' sur ' + st.length + '. ' : '') + g.course.name + '. ';
+  const best = bests[id] ?? null, rec = best === null || t < best;
+  line += rec ? (best === null ? 'Premier temps enregistré.' : 'Nouveau record ! Ancien : ' + fmt(best)) : 'Ton record : ' + fmt(best!);
+  if (rec) { bests[id] = t; try { localStorage.setItem('regate-bests', JSON.stringify(bests)); } catch { /* */ } }
   $('endBest').textContent = line;
   g.endShown = true; renderRank(); $('ovEnd').hidden = false; $('againBtn').focus();
 }
@@ -63,28 +87,33 @@ function renderRank(): void {
   });
 }
 
-// ---------- vues ----------
-const VIEWS: View[] = ['pov', 'chase', 'top'], VLBL: Record<View, string> = { pov: 'cockpit', chase: 'poursuite', top: 'vue du ciel' };
+// ---------- vues, son, temps ----------
+const VIEWS: View[] = ['pov', 'chase', 'top'], VLBL: Record<View, string> = { pov: 'cockpit', chase: 'poursuite', top: 'carte' };
 function setView(v: View): void {
   app.view = v; try { localStorage.setItem('regate-view', v); } catch { /* */ }
-  $('viewBtn').textContent = 'Vue : ' + VLBL[v] + ' (V)';
+  $('viewBtn').firstChild!.textContent = 'Vue : ' + VLBL[v];
   $('gl').style.visibility = v === 'top' ? 'hidden' : 'visible';
 }
 function nextView(): void { const L = R3 ? VIEWS : ['top' as View]; setView(L[(L.indexOf(app.view) + 1) % L.length]); }
-function setSnd(v: boolean): void { app.soundOn = v; try { localStorage.setItem('regate-snd', v ? '1' : '0'); } catch { /* */ } $('sndBtn').textContent = 'Son : ' + (v ? 'oui' : 'non') + ' (M)'; }
-function setAuto(v: boolean): void { app.auto = K.auto = v; $<HTMLInputElement>('autoChk').checked = v; $('autoBtn').textContent = 'Réglage auto : ' + (v ? 'oui' : 'non'); }
-
+function setSnd(v: boolean): void { app.soundOn = v; try { localStorage.setItem('regate-snd', v ? '1' : '0'); } catch { /* */ } $('sndBtn').firstChild!.textContent = 'Son : ' + (v ? 'oui' : 'non'); }
+function zoom(d: number): void { c2d.zoomI = Math.max(0, Math.min(ZOOMS.length - 1, c2d.zoomI + d)); if (app.view !== 'top') setView('top'); }
+function timeScale(d: number): void {
+  const g = app.g; if (!g || g.demo || g.mode !== 'solo') return;
+  const i = Math.max(0, Math.min(TIME_SCALES.length - 1, TIME_SCALES.indexOf(g.timeScale) + d));
+  g.timeScale = TIME_SCALES[i]; g.say(g.timeScale > 1 ? 'Temps accéléré ×' + g.timeScale : 'Temps réel');
+}
 $('viewBtn').addEventListener('click', nextView);
+$('zoomBtn').addEventListener('click', () => zoom(c2d.zoomI >= ZOOMS.length - 1 ? -ZOOMS.length : 1));
+$('timeBtn').addEventListener('click', () => timeScale(app.g && app.g.timeScale >= 50 ? -9 : 1));
 $('sndBtn').addEventListener('click', () => { unlockAudio(); setSnd(!app.soundOn); });
 try { setSnd(localStorage.getItem('regate-snd') !== '0'); } catch { /* */ }
 try { R3 = new Scene3D($<HTMLCanvasElement>('gl')); R3.onBoom = boom; } catch (e) { console.error(e); R3 = null; }
 {
   let v: string | null = null; try { v = localStorage.getItem('regate-view'); } catch { /* */ }
-  setView(R3 ? (VIEWS.includes(v as View) ? v as View : 'pov') : 'top');
-  if (!R3) $('viewBtn').hidden = true;
+  setView(R3 ? (VIEWS.includes(v as View) ? v as View : 'chase') : 'top');
 }
+c2d.cv.addEventListener('wheel', e => { if (app.view === 'top') { e.preventDefault(); zoom(e.deltaY < 0 ? 1 : -1); } }, { passive: false });
 
-// ---------- menus ----------
 function tab(isNet: boolean): void {
   $('tSolo').classList.toggle('on', !isNet); $('tNet').classList.toggle('on', isNet);
   $('pSolo').hidden = isNet; $('pNet').hidden = !isNet;
@@ -92,32 +121,78 @@ function tab(isNet: boolean): void {
 $('tSolo').addEventListener('click', () => tab(false));
 $('tNet').addEventListener('click', () => tab(true));
 $('goBtn').addEventListener('click', startSolo);
+$('resumeBtn').addEventListener('click', resume);
 $('againBtn').addEventListener('click', startSolo);
 $('menuBtn').addEventListener('click', menu);
-$('autoChk').addEventListener('change', e => setAuto((e.target as HTMLInputElement).checked));
-$('autoBtn').addEventListener('click', () => setAuto(!app.auto));
-const toggleSpi = () => { const g = app.g; if (g && !g.demo && g.me.fin == null) g.me.spi = !g.me.spi; };
-$('spiBtn').addEventListener('click', toggleSpi);
 
 // ---------- entrées ----------
-type Dir = 'left' | 'right' | 'up' | 'down';
-const playing = () => !!app.g && !app.g.demo && $('ovStart').hidden;
-const MAP: Record<string, Dir> = { ArrowLeft: 'left', KeyA: 'left', KeyQ: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'up', KeyW: 'up', KeyZ: 'up', ArrowDown: 'down', KeyS: 'down' };
+const playing = () => !!app.g && !app.g.demo && $('ovStart').hidden && !paused;
+const cmd = (c: Command) => { if (playing()) { unlockAudio(); app.g!.command(c); } };
+document.querySelectorAll<HTMLElement>('[data-cmd]').forEach(b => b.addEventListener('click', () => cmd(b.dataset.cmd as Command)));
+
+/** Barre : avec le pilote engagé, ← → décalent la consigne au lieu de barrer. */
+function steer(dir: number, big: boolean): boolean {
+  const g = app.g; if (!g || !g.me.pilot.on) return false;
+  g.command(dir < 0 ? (big ? 'pilotLeft10' : 'pilotLeft') : (big ? 'pilotRight10' : 'pilotRight'));
+  return true;
+}
 addEventListener('keydown', e => {
-  if ((e.target as HTMLElement).tagName === 'INPUT') return;
-  const k = MAP[e.code]; if (k && playing()) { K[k] = true; e.preventDefault(); }
-  if ((e.code === 'Space' || e.code === 'KeyE') && playing()) { e.preventDefault(); if (!e.repeat) toggleSpi(); }
-  if (e.code === 'KeyR' && playing() && app.g!.mode === 'solo') startSolo();
-  if (e.code === 'KeyV' && !e.repeat) nextView();
-  if (e.code === 'KeyM' && !e.repeat) { unlockAudio(); setSnd(!app.soundOn); }
+  if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') return;
+  const key = e.key.toLowerCase();
+  if (e.code === 'Escape') { if (playing()) menu(); else if (paused) resume(); return; }
+  if (e.code === 'KeyC' && !e.repeat) { nextView(); return; }
+  if (key === 'm' && !e.repeat) { unlockAudio(); setSnd(!app.soundOn); return; }
+  if (key === 'h' && !e.repeat) { const d = $<HTMLDetailsElement>('help'); d.open = !d.open; return; }
+  if (key === '+' || key === '=' || e.code === 'NumpadAdd') { zoom(1); return; }
+  if (key === '-' || e.code === 'NumpadSubtract') { zoom(-1); return; }
+  if (!playing()) return;
+  let handled = true;
+  if (e.code === 'ArrowLeft' || key === 'q') { if (!steer(-1, e.shiftKey)) K.left = true; }
+  else if (e.code === 'ArrowRight' || key === 'd') { if (!steer(1, e.shiftKey)) K.right = true; }
+  else if (e.code === 'ArrowUp' || key === 'z') { if (e.shiftKey) K.headIn = true; else K.mainIn = true; }
+  else if (e.code === 'ArrowDown' || key === 's') { if (e.shiftKey) K.headOut = true; else K.mainOut = true; }
+  else if (key === 'w') K.travUp = true;
+  else if (key === 'x') K.travDown = true;
+  else if (e.repeat) handled = false;
+  else if (/^(Digit|Numpad)[1-5]$/.test(e.code)) cmd(('head' + e.code.slice(-1)) as Command);
+  else if (key === 'p') cmd('reefIn');
+  else if (key === 'o') cmd('reefOut');
+  else if (key === 'k') cmd('keel');
+  else if (key === 'f') cmd('foils');
+  else if (key === 'b') cmd('ballast');
+  else if (key === 'a') cmd(e.shiftKey ? 'pilotMode' : 'pilot');
+  else if (e.code === 'Space') cmd('pilotTack');
+  else if (key === 't') timeScale(e.shiftKey ? -1 : 1);
+  else handled = false;
+  if (handled) e.preventDefault();
 });
-addEventListener('keyup', e => { const k = MAP[e.code]; if (k) K[k] = false; });
-addEventListener('blur', () => { K.left = K.right = K.up = K.down = false; });
+addEventListener('keyup', e => {
+  const key = e.key.toLowerCase();
+  if (e.code === 'ArrowLeft' || key === 'q') K.left = false;
+  if (e.code === 'ArrowRight' || key === 'd') K.right = false;
+  if (e.code === 'ArrowUp' || key === 'z') K.mainIn = K.headIn = false;
+  if (e.code === 'ArrowDown' || key === 's') K.mainOut = K.headOut = false;
+  if (key === 'w') K.travUp = false;
+  if (key === 'x') K.travDown = false;
+  if (e.key === 'Shift') { if (K.headIn) { K.headIn = false; K.mainIn = true; } if (K.headOut) { K.headOut = false; K.mainOut = true; } }
+});
+addEventListener('blur', () => { for (const k in K) K[k as Hold] = false; });
 document.querySelectorAll<HTMLElement>('[data-k]').forEach(b => {
-  const k = b.dataset.k as Dir;
-  const on = (e: PointerEvent) => { e.preventDefault(); K[k] = true; b.classList.add('on'); try { b.setPointerCapture(e.pointerId); } catch { /* */ } };
-  const off = () => { K[k] = false; b.classList.remove('on'); };
+  const k = b.dataset.k as Hold;
+  let rep = 0;
+  const on = (e: PointerEvent) => {
+    e.preventDefault(); b.classList.add('on'); try { b.setPointerCapture(e.pointerId); } catch { /* */ }
+    if ((k === 'left' || k === 'right') && steer(k === 'left' ? -1 : 1, false)) { rep = window.setInterval(() => steer(k === 'left' ? -1 : 1, false), 150); return; }
+    K[k] = true;
+  };
+  const off = () => { K[k] = false; b.classList.remove('on'); clearInterval(rep); };
   b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('lostpointercapture', off);
+});
+const input = (): BoatInput => ({
+  helm: (K.left ? -1 : 0) + (K.right ? 1 : 0),
+  mainDir: (K.mainOut ? 1 : 0) - (K.mainIn ? 1 : 0),
+  headDir: (K.headOut ? 1 : 0) - (K.headIn ? 1 : 0),
+  travDir: (K.travDown ? 1 : 0) - (K.travUp ? 1 : 0),
 });
 
 // ---------- boucle : simulation à pas fixe, rendu interpolé ----------
@@ -131,29 +206,40 @@ function draw(g: Game, dt: number, alpha: number): void {
     try { R3.render(g, boats, me, dt, rt, app.view); } catch (e) { console.error(e); R3 = null; setView('top'); }
     if (!g.demo) c2d.drawHUD(g, boats, me, null);
   } else {
-    const o = c2d.drawTop(g, boats, me);
-    if (!g.demo) c2d.drawHUD(g, boats, me, o);
+    const toS = c2d.drawTop(g, boats, me);
+    if (!g.demo) c2d.drawHUD(g, boats, me, toS);
   }
 }
 function loop(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   const g = app.g;
   if (g) {
-    acc += dt;
-    while (acc >= STEP) { g.update(STEP, K); acc -= STEP; }
+    if (!paused) {
+      acc += dt * g.timeScale;
+      const inp = input(), t0 = performance.now();
+      while (acc >= STEP) {
+        g.update(STEP, inp); acc -= STEP;
+        if (performance.now() - t0 > 40) { acc = 0; break; } // machine trop lente pour cette accélération
+      }
+    }
     if (g.over) demo();
-    else draw(g, dt, acc / STEP);
+    else draw(g, dt, paused ? 1 : acc / STEP);
   }
   updSound(app.g, app.g ? app.g.simT : 0);
-  hudT -= dt; if (hudT <= 0) { updateHud(app.g, renderRank); hudT = 0.1; }
+  hudT -= dt; if (hudT <= 0) { updateHud(app.g, renderRank); hudT = 0.1; $('timeBtn').firstChild!.textContent = 'Temps ×' + (app.g?.timeScale ?? 1); }
   requestAnimationFrame(loop);
 }
 
 // accès pour les tests automatisés (Playwright)
 (window as unknown as { __regate: unknown }).__regate = {
-  app, setView, startSolo, K,
+  app, setView, startSolo, K, c2d,
+  /** Oriente la caméra (tests). */
+  lookAt(yaw: number, pitch = 0) { if (R3) { R3.look.yaw = yaw; R3.look.pitch = pitch; R3.look.idle = -1e9; } },
+  /** Confie le bateau du joueur à une IA (tests). */
+  autopilot() { const g = app.g; if (g) { g.me.ai = mkAI(LEVELS[2], g.me.x, makeRng(5), newMem()); g.me.perf = 1; } },
   /** Avance la simulation de n secondes d'un coup (tests). */
-  advance(n: number) { const g = app.g; if (g) for (let i = 0; i < n / STEP && !g.over; i++) g.update(STEP, K); },
+  advance(n: number) { const g = app.g; if (g) for (let i = 0; i < n / STEP && !g.over; i++) g.update(STEP, input()); },
 };
 
+void PRE;
 fit(); demo(); updateHud(app.g, renderRank); requestAnimationFrame(loop);

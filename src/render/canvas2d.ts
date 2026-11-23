@@ -1,273 +1,326 @@
-// Rendu 2D : vue du ciel et surimpressions (instruments, panneau de réglage, classement, carte).
-import { D, TAU, clamp, hash, norm } from '../util/math';
-import { MARKS, PIN, CMTE, objective } from '../game/course';
-import { trimState } from '../game/trim';
+// Rendu 2D : vue du ciel (tactique, avec zoom) et surimpressions (instruments, réglage, classement, carte).
+import { D, TAU, clamp, hash, norm, fmt } from '../util/math';
+import { ISLANDS, shoreR } from '../physics/world';
+import { vmgAngles } from '../physics/polar';
+import { headAngle, mainAngle } from '../physics/model';
 import type { Game } from '../game/game';
 import type { Boat } from '../physics/boat';
 import { app } from '../app';
 
-export interface Off { ox: number; oy: number }
+export type ToScreen = (x: number, y: number) => [number, number];
+export const ZOOMS = [0.08, 0.25, 0.7, 1.6, 3.5];
+const fmtDist = (m: number) => m < 1852 ? Math.round(m / 10) * 10 + ' m' : (m / 1852).toFixed(m < 18520 ? 1 : 0).replace('.', ',') + ' M';
 
 export class Canvas2D {
   readonly ctx: CanvasRenderingContext2D;
   DPR = 1; VW = 800; VH = 500;
   cam = { x: 0, y: 150 };
-  /** Temps de rendu courant (s), pour les animations. */
+  zoomI = 3;
   rt = 0;
 
-  constructor(readonly cv: HTMLCanvasElement) {
-    this.ctx = cv.getContext('2d')!;
-  }
+  constructor(readonly cv: HTMLCanvasElement) { this.ctx = cv.getContext('2d')!; }
 
+  get zoom(): number { return ZOOMS[this.zoomI]; }
   fit(): void {
     const r = this.cv.getBoundingClientRect();
     this.DPR = Math.min(2, window.devicePixelRatio || 1);
     this.VW = r.width; this.VH = r.height;
-    this.cv.width = Math.round(this.VW * this.DPR);
-    this.cv.height = Math.round(this.VH * this.DPR);
+    this.cv.width = Math.round(this.VW * this.DPR); this.cv.height = Math.round(this.VH * this.DPR);
   }
-
   resetCam(x: number, y: number): void { this.cam = { x, y }; }
-
-  clear(): void {
-    this.ctx.setTransform(this.DPR, 0, 0, this.DPR, 0, 0);
-    this.ctx.clearRect(0, 0, this.VW, this.VH);
-  }
+  clear(): void { this.ctx.setTransform(this.DPR, 0, 0, this.DPR, 0, 0); this.ctx.clearRect(0, 0, this.VW, this.VH); }
 
   private rrect(x: number, y: number, w: number, h: number, r: number): void {
-    const ctx = this.ctx;
-    ctx.beginPath();
+    const ctx = this.ctx; ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
   }
-
-  private buoy(x: number, y: number, col: string, r: number, label: string, hot: boolean): void {
-    const ctx = this.ctx;
-    ctx.fillStyle = 'rgba(0,20,40,.3)'; ctx.beginPath(); ctx.ellipse(x + 4, y + 5, r, r * 0.8, 0, 0, TAU); ctx.fill();
-    if (hot) {
-      const p = (this.rt * 1.2) % 1;
-      ctx.strokeStyle = `rgba(255,255,255,${1 - p})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 6 + p * 60, 0, TAU); ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.setLineDash([6, 8]); ctx.beginPath(); ctx.arc(x, y, 85, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
-    }
-    const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, 1, x, y, r);
-    g.addColorStop(0, '#fff3e0'); g.addColorStop(0.35, col); g.addColorStop(1, '#a8360a');
-    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
-    if (label) { ctx.fillStyle = '#fff'; ctx.font = '800 13px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, x, y + 1); }
+  private panel(x: number, y: number, w: number, h: number, r = 12, a = 0.62): void {
+    this.ctx.fillStyle = `rgba(4,30,50,${a})`; this.rrect(x, y, w, h, r); this.ctx.fill();
   }
 
-  private drawWake(b: Boat): void {
-    const ctx = this.ctx;
-    ctx.fillStyle = '#fff';
-    for (const p of b.wake) { ctx.globalAlpha = (1 - p.t / 2.6) * 0.45; ctx.beginPath(); ctx.arc(p.x, p.y, 2 + p.t * 3, 0, TAU); ctx.fill(); }
-    ctx.globalAlpha = 1;
-  }
-
-  private drawBoat(b: Boat, label: string, isMe: boolean): void {
-    const ctx = this.ctx, anim = this.rt;
-    ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.h);
-    const hull = () => { ctx.beginPath(); ctx.moveTo(0, -24); ctx.bezierCurveTo(11, -12, 11, 10, 7, 20); ctx.lineTo(-7, 20); ctx.bezierCurveTo(-11, 10, -11, -12, 0, -24); ctx.closePath(); };
-    ctx.save(); ctx.translate(3, 5); hull(); ctx.fillStyle = 'rgba(0,20,40,.3)'; ctx.fill(); ctx.restore();
-    hull();
-    const hg = ctx.createLinearGradient(-10, 0, 10, 0); hg.addColorStop(0, '#fff'); hg.addColorStop(1, '#d4e3ec');
-    ctx.fillStyle = hg; ctx.fill(); ctx.strokeStyle = isMe ? '#fff' : '#0a3550'; ctx.lineWidth = isMe ? 2.5 : 1.5; ctx.stroke();
-    ctx.fillStyle = b.col; ctx.beginPath(); ctx.moveTo(0, -24); ctx.bezierCurveTo(4, -20, 6, -16, 7, -12); ctx.lineTo(-7, -12); ctx.bezierCurveTo(-6, -16, -4, -20, 0, -24); ctx.fill();
-    ctx.fillStyle = '#b9cfdc'; ctx.fillRect(-5, 7, 10, 10);
-    const side = b.twa >= 0 ? 1 : -1, a = Math.abs(b.twa) / D, s = (8 + b.sheet * 80) * D;
-    const ux = side * Math.sin(s), uy = Math.cos(s), L = 26, my = -6, bx = ux * L, by = my + uy * L;
-    const luff = a < 32 || b.sheet - b.opt > 0.13;
-    const camber = luff ? 1.5 + Math.sin(anim * 34 + b.x) * 4 : 4 + Math.min(1, b.eff) * 4;
-    const nx = side * Math.cos(s), ny = -Math.sin(s);
-    ctx.beginPath(); ctx.moveTo(0, my); ctx.quadraticCurveTo(bx / 2 + nx * camber, (my + by) / 2 + ny * camber, bx, by); ctx.closePath();
-    ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.fill(); ctx.strokeStyle = '#5f7f93'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.strokeStyle = '#22404f'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, my); ctx.lineTo(bx, by); ctx.stroke();
-    if (b.spiT > 0.02) {
-      const k = b.spiT, fl = a < 80 ? Math.sin(anim * 28 + b.y) * 5 * k : 0;
-      ctx.beginPath(); ctx.moveTo(0, -8);
-      ctx.quadraticCurveTo(side * (30 * k + fl), -6, side * 22 * k, -22 - 10 * k);
-      ctx.quadraticCurveTo(side * (14 * k + fl), -30 - 16 * k, 0, -26); ctx.closePath();
-      const sg = ctx.createLinearGradient(0, -8, side * 24 * k, -28); sg.addColorStop(0, b.col); sg.addColorStop(0.55, '#ffffff'); sg.addColorStop(1, b.col);
-      ctx.globalAlpha = 0.92; ctx.fillStyle = sg; ctx.fill(); ctx.globalAlpha = 1; ctx.strokeStyle = 'rgba(10,40,60,.5)'; ctx.lineWidth = 1; ctx.stroke();
+  /** Bateau en mètres (repère monde déjà appliqué). k : facteur d'agrandissement si zoom faible. */
+  private drawBoat(b: Boat, k: number, isMe: boolean): void {
+    const ctx = this.ctx, z = this.zoom;
+    ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.h); ctx.scale(k, k);
+    const hull = () => { ctx.beginPath(); ctx.moveTo(-1, -9.1); ctx.quadraticCurveTo(-2.9, -6, -2.8, 0); ctx.lineTo(-2.5, 9.1); ctx.lineTo(2.5, 9.1); ctx.lineTo(2.8, 0); ctx.quadraticCurveTo(2.9, -6, 1, -9.1); ctx.closePath(); };
+    ctx.save(); ctx.translate(1, 1.6); hull(); ctx.fillStyle = 'rgba(0,20,40,.3)'; ctx.fill(); ctx.restore();
+    hull(); ctx.fillStyle = '#f3f6f8'; ctx.fill(); ctx.lineWidth = (isMe ? 2.5 : 1.2) / z / k; ctx.strokeStyle = isMe ? '#fff' : '#0a3550'; ctx.stroke();
+    ctx.fillStyle = b.col; ctx.fillRect(-2.6, 2, 5.2, 1.4);
+    ctx.fillStyle = '#33464f'; ctx.fillRect(-1.2, 0.5, 2.4, 3.8);
+    const tack = b.twa >= 0 ? 1 : -1;
+    // foils sortis
+    ctx.strokeStyle = '#1f2a30'; ctx.lineWidth = 0.35;
+    if (b.foilP > 0.05) { ctx.beginPath(); ctx.moveTo(-2.7, -2); ctx.lineTo(-2.7 - 3 * b.foilP, -1.6); ctx.stroke(); }
+    if (b.foilS > 0.05) { ctx.beginPath(); ctx.moveTo(2.7, -2); ctx.lineTo(2.7 + 3 * b.foilS, -1.6); ctx.stroke(); }
+    // grand-voile (bôme) et voile d'avant
+    const lee = tack, mA = clamp(mainAngle(b.mainSheet, b.trav), -6, 85) * D, mz = -1.5;
+    const aa = Math.abs(b.awa) / D, mf = b.knock > 0 || aa < mainAngle(b.mainSheet, b.trav) + 2;
+    const camb = mf ? Math.sin(this.rt * 30 + b.x) * 0.6 : 1.1;
+    ctx.beginPath(); ctx.moveTo(0, mz);
+    const bx = lee * Math.sin(mA) * 7.2, by = mz + Math.cos(mA) * 7.2;
+    ctx.quadraticCurveTo(bx / 2 + lee * Math.cos(mA) * camb, (mz + by) / 2 - Math.sin(mA) * camb, bx, by); ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.fill(); ctx.strokeStyle = '#5f7f93'; ctx.lineWidth = 0.15; ctx.stroke();
+    ctx.strokeStyle = '#1b2328'; ctx.lineWidth = 0.35; ctx.beginPath(); ctx.moveTo(0, mz); ctx.lineTo(bx, by); ctx.stroke();
+    if (b.headPow > 0.05) {
+      const s = b.cls.heads[b.head], hA = headAngle(s, b.headSheet) * D, gen = s.id === 'A3' || s.id === 'C0';
+      const tz = gen ? -11.4 : -9, len = (gen ? (s.id === 'A3' ? 13 : 10) : 7) * b.headPow;
+      const cx = lee * Math.sin(hA) * len, cy = tz + Math.cos(hA) * len, bel = s.id === 'A3' ? 4 : 1.2;
+      ctx.beginPath(); ctx.moveTo(0, tz); ctx.quadraticCurveTo(cx / 2 + lee * Math.cos(hA) * bel, (tz + cy) / 2 - Math.sin(hA) * bel, cx, cy); ctx.lineTo(0, tz);
+      ctx.fillStyle = s.color ? s.color : 'rgba(255,255,255,.9)'; ctx.globalAlpha = 0.92; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(10,40,60,.5)'; ctx.lineWidth = 0.12; ctx.stroke();
     }
-    ctx.fillStyle = '#22404f'; ctx.beginPath(); ctx.arc(0, my, 2.4, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#1b2328'; ctx.beginPath(); ctx.arc(0, mz, 0.5, 0, TAU); ctx.fill();
     ctx.restore();
-    if (label) {
-      ctx.font = '600 12px Barlow,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = 'rgba(4,30,50,.55)';
-      const w = ctx.measureText(label).width + 10; this.rrect(b.x - w / 2, b.y + 28, w, 17, 8); ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.fillText(label, b.x, b.y + 30);
-    }
   }
 
-  /** Vue du ciel. */
-  drawTop(g: Game, boats: Boat[], me: Boat): Off {
-    const ctx = this.ctx, w = this.VW, h = this.VH, anim = this.rt, t = g.t, cam = this.cam;
+  /** Vue du ciel. Renvoie la projection monde → écran. */
+  drawTop(g: Game, boats: Boat[], me: Boat): ToScreen {
+    const ctx = this.ctx, w = this.VW, h = this.VH, z = this.zoom, cam = this.cam, anim = this.rt;
     ctx.setTransform(this.DPR, 0, 0, this.DPR, 0, 0);
-    const cx = me.x + Math.sin(me.h) * me.v * 14, cy = me.y - Math.cos(me.h) * me.v * 14;
+    const lead = Math.min(w, h) * 0.18 / z;
+    const cx = me.x + Math.sin(me.h) * Math.min(lead, me.v * 6), cy = me.y - Math.cos(me.h) * Math.min(lead, me.v * 6);
     cam.x += (cx - cam.x) * 0.06; cam.y += (cy - cam.y) * 0.06;
-    const ox = w / 2 - cam.x, oy = h / 2 - cam.y, vx0 = cam.x - w / 2, vy0 = cam.y - h / 2;
+    const toS: ToScreen = (x, y) => [w / 2 + (x - cam.x) * z, h / 2 + (y - cam.y) * z];
+    const vx0 = cam.x - w / 2 / z, vy0 = cam.y - h / 2 / z, vx1 = cam.x + w / 2 / z, vy1 = cam.y + h / 2 / z;
     const bg = ctx.createLinearGradient(0, 0, w, h); bg.addColorStop(0, '#1077b0'); bg.addColorStop(1, '#0a4d7a');
     ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-    ctx.save(); ctx.translate(ox, oy);
-    g.wind.eachGust(vx0 - 320, vy0 - 320, vx0 + w + 320, vy0 + h + 320, t, (gx, gy, r, s) => {
+    ctx.save(); ctx.translate(w / 2, h / 2); ctx.scale(z, z); ctx.translate(-cam.x, -cam.y);
+    const px = 1 / z; // un pixel en mètres
+    // risées
+    g.wind.eachGust(vx0 - 900, vy0 - 900, vx1 + 900, vy1 + 900, g.t, (gx, gy, r, s) => {
       const rg = ctx.createRadialGradient(gx, gy, 0, gx, gy, r);
       rg.addColorStop(0, `rgba(3,28,52,${0.1 + s * 0.035})`); rg.addColorStop(1, 'rgba(3,28,52,0)');
       ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(gx, gy, r, 0, TAU); ctx.fill();
     });
-    const C = 78, x0 = Math.floor(vx0 / C) - 1, x1 = Math.ceil((vx0 + w) / C) + 1, y0 = Math.floor(vy0 / C) - 1, y1 = Math.ceil((vy0 + h) / C) + 1;
+    // rides de vent (densité constante à l'écran)
+    const C = 78 * px, x0 = Math.floor(vx0 / C) - 1, x1 = Math.ceil(vx1 / C) + 1, y0 = Math.floor(vy0 / C) - 1, y1 = Math.ceil(vy1 / C) + 1;
     const wx = -Math.sin(g.wd), wy = Math.cos(g.wd);
-    ctx.lineWidth = 1.6; ctx.lineCap = 'round';
-    for (let i = x0; i <= x1; i++) for (let j = y0; j <= y1; j++) {
-      const r1 = hash(i, j), r2 = hash(j, i), ph = (anim * 0.35 + r1) % 1, d = ph * 60, px = i * C + r2 * C + wx * d, py = j * C + r1 * C + wy * d;
+    ctx.lineWidth = 1.6 * px; ctx.lineCap = 'round';
+    if ((x1 - x0) * (y1 - y0) < 6000) for (let i = x0; i <= x1; i++) for (let j = y0; j <= y1; j++) {
+      const r1 = hash(i, j), r2 = hash(j, i), ph = (anim * 0.35 + r1) % 1, d = ph * 60 * px, qx = i * C + r2 * C + wx * d, qy = j * C + r1 * C + wy * d;
       ctx.strokeStyle = `rgba(220,240,255,${Math.sin(ph * Math.PI) * 0.38})`;
-      ctx.save(); ctx.translate(px, py); ctx.rotate(g.wd); ctx.beginPath(); ctx.moveTo(-8, 0); ctx.quadraticCurveTo(0, -4, 8, 0); ctx.stroke(); ctx.restore();
+      ctx.save(); ctx.translate(qx, qy); ctx.rotate(g.wd); ctx.beginPath(); ctx.moveTo(-8 * px, 0); ctx.quadraticCurveTo(0, -4 * px, 8 * px, 0); ctx.stroke(); ctx.restore();
     }
-    const lineHot = me.leg === 0 || me.leg === 4 || me.ocs;
-    ctx.strokeStyle = lineHot ? 'rgba(255,255,255,.9)' : 'rgba(255,255,255,.35)'; ctx.lineWidth = 2; ctx.setLineDash([10, 8]);
-    ctx.beginPath(); ctx.moveTo(PIN.x, 0); ctx.lineTo(CMTE.x, 0); ctx.stroke(); ctx.setLineDash([]);
+    // îles
+    for (const isl of ISLANDS) {
+      if (isl.x + isl.r * 1.3 < vx0 || isl.x - isl.r * 1.3 > vx1 || isl.y + isl.r * 1.3 < vy0 || isl.y - isl.r * 1.3 > vy1) continue;
+      const path = (k: number) => { ctx.beginPath(); for (let a = 0; a <= 64; a++) { const th = a / 64 * TAU, R = shoreR(isl, th) * k; const X = isl.x + Math.cos(th) * R, Y = isl.y + Math.sin(th) * R; if (a) ctx.lineTo(X, Y); else ctx.moveTo(X, Y); } ctx.closePath(); };
+      path(1.12); ctx.fillStyle = 'rgba(120,200,210,.35)'; ctx.fill();
+      path(1); ctx.fillStyle = '#e3d6ae'; ctx.fill();
+      path(0.9); ctx.fillStyle = '#5f8456'; ctx.fill();
+      path(0.45); ctx.fillStyle = '#46653f'; ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.font = `700 ${14 * px}px Barlow,sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(isl.name, isl.x, isl.y);
+    }
+    // parcours
+    const c = g.course, N = c.marks.length;
+    ctx.setLineDash([8 * px, 8 * px]); ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.lineWidth = 1.5 * px;
+    ctx.beginPath(); ctx.moveTo(0, 0); for (const m of c.marks) ctx.lineTo(m.x, m.y); ctx.lineTo(0, 0); ctx.stroke(); ctx.setLineDash([]);
+    // laylines vers la prochaine marque (au près / au portant)
+    const nm = me.leg >= 1 && me.leg <= N && !me.ocs ? c.marks[me.leg - 1] : null;
+    if (nm && !g.demo) {
+      const ang = vmgAngles(me.cls.polar, Math.round(me.tws));
+      const rel = norm(Math.atan2(nm.x - me.x, -(nm.y - me.y)) - g.wd), L = 6000;
+      const draw = (a: number) => { for (const s of [-1, 1]) { const hh = g.wd + s * a * D; ctx.beginPath(); ctx.moveTo(nm.x, nm.y); ctx.lineTo(nm.x - Math.sin(hh) * L, nm.y + Math.cos(hh) * L); ctx.stroke(); } };
+      ctx.strokeStyle = 'rgba(255,214,120,.5)'; ctx.lineWidth = 1.5 * px; ctx.setLineDash([3 * px, 6 * px]);
+      if (Math.abs(rel) < ang.up * D + 0.1) draw(ang.up); else if (Math.abs(rel) > ang.down * D - 0.1) draw(ang.down);
+      ctx.setLineDash([]);
+    }
+    // ligne de départ / arrivée
+    const lineHot = me.leg === 0 || me.leg > N || me.ocs;
+    ctx.strokeStyle = lineHot ? 'rgba(255,255,255,.9)' : 'rgba(255,255,255,.35)'; ctx.lineWidth = 2 * px; ctx.setLineDash([10 * px, 8 * px]);
+    ctx.beginPath(); ctx.moveTo(c.pin.x, c.pin.y); ctx.lineTo(c.cmte.x, c.cmte.y); ctx.stroke(); ctx.setLineDash([]);
     if (lineHot) {
-      ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.font = '800 15px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-      ctx.fillText(me.leg === 4 ? 'ARRIVÉE ↓' : 'DÉPART ↑', 0, me.leg === 4 ? -12 : 24);
+      ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.font = `800 ${15 * px}px "Barlow Condensed",sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(me.leg > N ? 'ARRIVÉE ↓' : 'DÉPART ↑', 0, me.leg > N ? -14 * px : 16 * px);
     }
-    ctx.save(); ctx.translate(CMTE.x + 8, 0);
-    ctx.fillStyle = 'rgba(0,20,40,.3)'; ctx.fillRect(-11, -26, 26, 58);
-    ctx.fillStyle = '#eef3f6'; ctx.beginPath(); ctx.moveTo(0, -30); ctx.quadraticCurveTo(13, -14, 12, 26); ctx.lineTo(-12, 26); ctx.quadraticCurveTo(-13, -14, 0, -30); ctx.fill();
-    ctx.fillStyle = '#8aa4b3'; ctx.fillRect(-7, -4, 14, 16); ctx.fillStyle = t < 0 ? '#3d7bd9' : '#ff6a1f'; ctx.fillRect(1, -24, 10, 7);
+    const mk = (x: number, y: number, col: string, label: string, hot: boolean) => {
+      const r = Math.max(3, 6 * px);
+      if (hot) { const p = (anim * 1.2) % 1; ctx.strokeStyle = `rgba(255,255,255,${1 - p})`; ctx.lineWidth = 2 * px; ctx.beginPath(); ctx.arc(x, y, r + (6 + p * 50) * px, 0, TAU); ctx.stroke(); }
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); ctx.strokeStyle = '#7a2a08'; ctx.lineWidth = 1 * px; ctx.stroke();
+      if (label) { ctx.fillStyle = '#fff'; ctx.font = `800 ${13 * px}px "Barlow Condensed",sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, x, y - r - 9 * px); }
+    };
+    mk(c.pin.x, c.pin.y, '#ffc93c', '', false);
+    ctx.save(); ctx.translate(c.cmte.x + 5, c.cmte.y); const ks = Math.max(1, 10 * px / 3);
+    ctx.scale(ks, ks); ctx.fillStyle = '#eef3f6'; ctx.fillRect(-2.5, -8, 5, 16); ctx.fillStyle = g.t < 0 ? '#3d7bd9' : '#ff6a1f'; ctx.fillRect(0, -6, 2.5, 2); ctx.restore();
+    c.marks.forEach((m, i) => {
+      const hot = me.leg === i + 1 && !me.ocs && !g.demo;
+      const lbl = (m.side === 'port' ? '◀ ' : '') + (i + 1) + (m.side === 'stbd' ? ' ▶' : '');
+      if (m.island == null) mk(m.x, m.y, '#ff6a1f', lbl, hot);
+      else if (hot) { ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 2 * px; ctx.setLineDash([6 * px, 6 * px]); ctx.beginPath(); ctx.moveTo(m.x + m.out.x * m.rayStart, m.y + m.out.y * m.rayStart); ctx.lineTo(m.x + m.out.x * m.rayLen, m.y + m.out.y * m.rayLen); ctx.stroke(); ctx.setLineDash([]); }
+    });
+    // sillages et bateaux
+    ctx.fillStyle = '#fff';
+    for (const b of boats) for (const p of b.wake) { ctx.globalAlpha = (1 - p.t / 6) * 0.4; ctx.beginPath(); ctx.arc(p.x, p.y, 1 + p.t * 0.8, 0, TAU); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    const k = Math.max(1, 40 * px / 18.3);
+    for (const b of boats) if (b !== me) this.drawBoat(b, k, false);
+    this.drawBoat(me, k, !g.demo);
     ctx.restore();
-    this.buoy(PIN.x, PIN.y, '#ffc93c', 8, '', false);
-    MARKS.forEach((m, i) => this.buoy(m.x, m.y, '#ff6a1f', 12, String(i + 1), me.leg === i + 1 && !me.ocs && !g.demo));
-    for (const b of boats) this.drawWake(b);
-    for (const b of boats) if (b !== me) this.drawBoat(b, b.name, false);
-    this.drawBoat(me, g.demo ? '' : (boats.length > 1 ? 'Toi' : ''), !g.demo);
-    ctx.restore();
-    return { ox, oy };
+    // étiquettes en pixels
+    ctx.font = '600 12px Barlow,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (const b of boats) {
+      const label = b === me ? (g.demo ? '' : 'Toi') : b.name; if (!label) continue;
+      const [sx, sy] = toS(b.x, b.y), wl = ctx.measureText(label).width + 10;
+      ctx.fillStyle = 'rgba(4,30,50,.55)'; this.rrect(sx - wl / 2, sy + 14 * k * z / k + 12, wl, 17, 8); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fillText(label, sx, sy + 14 * k * z / k + 14);
+    }
+    return toS;
   }
 
-  private yarn(x: number, y: number, col: string, bad: boolean, ph: number): void {
-    const ctx = this.ctx;
-    ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y);
-    for (let i = 1; i <= 8; i++) { const xx = x + i * 3.4, yy = y + (bad ? Math.sin(ph + i * 0.9) * 4 - i * 0.9 : Math.sin(ph * 0.5 + i) * 0.6); ctx.lineTo(xx, yy); }
-    ctx.stroke();
-  }
-
-  private drawTrim(me: Boat, w: number, h: number): void {
+  private drawTrim(me: Boat, auto: boolean, w: number, h: number): void {
     const ctx = this.ctx, anim = this.rt;
-    const S = trimState(me), narrow = w < 640, pw = Math.min(400, w - 24 - (narrow ? 110 : 0)), px = narrow ? 12 : (w - pw) / 2, py = h - 114, ph = 102;
-    ctx.fillStyle = 'rgba(4,30,50,.74)'; this.rrect(px, py, pw, ph, 16); ctx.fill();
-    ctx.strokeStyle = S.col; ctx.globalAlpha = S.lvl === 2 ? 0.6 + 0.4 * Math.sin(anim * 9) : 0.9; ctx.lineWidth = 2; this.rrect(px + 1, py + 1, pw - 2, ph - 2, 15); ctx.stroke(); ctx.globalAlpha = 1;
-    ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillStyle = S.col; ctx.font = '800 24px "Barlow Condensed",sans-serif'; ctx.fillText(S.txt, px + 16, py + 22);
-    ctx.textAlign = 'right'; ctx.font = '600 12px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText(app.auto ? 'réglage auto' : 'rendement', px + pw - 16, py + 15);
-    const ef = Math.round(clamp(me.cap > 0 ? 0 : me.eff, 0, 1) * 100);
-    ctx.font = '800 20px "Barlow Condensed",sans-serif'; ctx.fillStyle = ef > 88 ? '#3ddc97' : ef > 65 ? '#f4a261' : '#e8384f'; ctx.fillText(ef + ' %', px + pw - 16, py + 32);
-    const x0 = px + 16, x1 = px + pw - 16, bw = x1 - x0, by = py + 52, X = (v: number) => x0 + clamp(v, 0, 1) * bw;
-    ctx.fillStyle = 'rgba(255,255,255,.16)'; this.rrect(x0, by, bw, 12, 6); ctx.fill();
-    ctx.fillStyle = 'rgba(61,220,151,.28)'; this.rrect(X(S.tgt - 0.13), by, X(S.tgt + 0.13) - X(S.tgt - 0.13), 12, 6); ctx.fill();
-    ctx.fillStyle = '#3ddc97'; this.rrect(X(S.tgt - 0.05), by, X(S.tgt + 0.05) - X(S.tgt - 0.05), 12, 6); ctx.fill();
-    const cx = X(me.sheet);
-    if (S.ad > 0.13 && me.cap <= 0) {
-      const dir = S.d > 0 ? -1 : 1; ctx.fillStyle = 'rgba(255,255,255,.85)';
-      for (let i = 0; i < 3; i++) {
-        const ax = cx + dir * (14 + i * 10 + ((anim * 30) % 10));
-        if ((dir < 0 && ax < X(S.tgt)) || (dir > 0 && ax > X(S.tgt))) continue;
-        ctx.beginPath(); ctx.moveTo(ax + dir * 5, by + 6); ctx.lineTo(ax - dir * 2, by + 1); ctx.lineTo(ax - dir * 2, by + 11); ctx.fill();
-      }
-    }
-    ctx.fillStyle = '#fff'; ctx.fillRect(cx - 2, by - 6, 4, 24); ctx.beginPath(); ctx.moveTo(cx - 7, by - 10); ctx.lineTo(cx + 7, by - 10); ctx.lineTo(cx, by - 3); ctx.fill();
-    ctx.font = '600 11px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.textAlign = 'left'; ctx.fillText('◀ bordé (↑)', x0, by + 24); ctx.textAlign = 'right'; ctx.fillText('choqué (↓) ▶', x1, by + 24);
-    const wb = S.d > 0.08 || me.cap > 0, lb = S.d < -0.08, yy = py + 90;
-    ctx.textAlign = 'left'; ctx.font = '600 12px Barlow,sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText('Penons', x0, yy);
-    const half = x0 + 56;
-    this.yarn(half, yy, '#e8384f', wb, anim * 14);
-    ctx.fillStyle = wb ? '#ffb3bd' : 'rgba(255,255,255,.7)'; ctx.fillText(wb ? 'au vent : se lève' : 'au vent : file', half + 34, yy);
-    if (pw > 330) {
-      const h2 = half + (pw - 88) / 2 - 14; ctx.font = '600 12px Barlow,sans-serif';
-      this.yarn(h2, yy, '#3ddc97', lb, anim * 14 + 2);
-      ctx.fillStyle = lb ? '#b6f5d9' : 'rgba(255,255,255,.7)'; ctx.fillText(lb ? 'sous le vent : décroche' : 'sous le vent : file', h2 + 32, yy);
+    const narrow = w < 640, pw = Math.min(430, w - 24 - (narrow ? 110 : 0)), px = narrow ? 12 : (w - pw) / 2, ph = 124, py = h - ph - 12;
+    this.panel(px, py, pw, ph, 16, 0.74);
+    const x0 = px + 96, x1 = px + pw - 16, bw = x1 - x0, X = (v: number) => x0 + clamp(v, 0, 1) * bw;
+    const row = (y: number, name: string, cur: number, tgt: number, keys: string) => {
+      const d = cur - tgt, ad = Math.abs(d), col = ad < 0.05 ? '#3ddc97' : ad < 0.13 ? '#c5e86c' : ad < 0.25 ? '#f4a261' : '#e8384f';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '800 17px "Barlow Condensed",sans-serif'; ctx.fillStyle = col; ctx.fillText(name, px + 14, y + 6);
+      ctx.font = '600 10px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.fillText(keys, px + 14, y + 21);
+      ctx.fillStyle = 'rgba(255,255,255,.16)'; this.rrect(x0, y, bw, 12, 6); ctx.fill();
+      ctx.fillStyle = 'rgba(61,220,151,.28)'; this.rrect(X(tgt - 0.13), y, X(tgt + 0.13) - X(tgt - 0.13), 12, 6); ctx.fill();
+      ctx.fillStyle = '#3ddc97'; this.rrect(X(tgt - 0.05), y, X(tgt + 0.05) - X(tgt - 0.05), 12, 6); ctx.fill();
+      const cx = X(cur);
+      if (ad > 0.13 && !auto) { const dir = d > 0 ? -1 : 1; ctx.fillStyle = 'rgba(255,255,255,.85)'; for (let i = 0; i < 3; i++) { const ax = cx + dir * (14 + i * 10 + ((anim * 30) % 10)); if ((dir < 0 && ax < X(tgt)) || (dir > 0 && ax > X(tgt))) continue; ctx.beginPath(); ctx.moveTo(ax + dir * 5, y + 6); ctx.lineTo(ax - dir * 2, y + 1); ctx.lineTo(ax - dir * 2, y + 11); ctx.fill(); } }
+      ctx.fillStyle = '#fff'; ctx.fillRect(cx - 2, y - 5, 4, 22);
+    };
+    ctx.textAlign = 'right'; ctx.font = '600 11px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)';
+    ctx.fillText(auto ? 'écoutes automatiques' : '◀ bordé · choqué ▶', x1, py + 14);
+    const ef = Math.round(me.eff * 100);
+    ctx.textAlign = 'left'; ctx.font = '800 15px "Barlow Condensed",sans-serif'; ctx.fillStyle = ef > 95 ? '#3ddc97' : ef > 80 ? '#f4a261' : '#e8384f';
+    ctx.fillText('Polaire ' + ef + ' %', px + 14, py + 14);
+    row(py + 28, 'Grand-voile', me.mainSheet, me.ideal.mainSheet, '↑ ↓');
+    row(py + 60, me.cls.heads[me.head].id + ' · voile d\'avant', me.headSheet, me.ideal.headSheet, 'Maj + ↑ ↓');
+    // chariot
+    const ty = py + 96;
+    ctx.font = '600 11px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.textAlign = 'left'; ctx.fillText('Chariot (W/X)', px + 14, ty + 6);
+    const tx0 = x0, tw = Math.min(140, bw * 0.4), T = (v: number) => tx0 + (v + 1) / 2 * tw;
+    ctx.fillStyle = 'rgba(255,255,255,.16)'; this.rrect(tx0, ty, tw, 10, 5); ctx.fill();
+    ctx.fillStyle = 'rgba(61,220,151,.6)'; ctx.fillRect(T(me.ideal.trav) - 3, ty, 6, 10);
+    ctx.fillStyle = '#fff'; ctx.fillRect(T(me.trav) - 2, ty - 3, 4, 16);
+    // penons
+    const d = me.headSheet - me.ideal.headSheet, wb = d > 0.06, lb = d < -0.06, yx = tx0 + tw + 16;
+    if (x1 - yx > 150) {
+      const yarn = (x: number, y: number, col: string, bad: boolean, ph: number) => { ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y); for (let i = 1; i <= 6; i++) ctx.lineTo(x + i * 3.4, y + (bad ? Math.sin(ph + i * 0.9) * 4 - i * 0.9 : Math.sin(ph * 0.5 + i) * 0.6)); ctx.stroke(); };
+      yarn(yx, ty + 5, '#e8384f', wb, anim * 14); yarn(yx + 30, ty + 5, '#3ddc97', lb, anim * 14 + 2);
+      ctx.fillStyle = wb ? '#ffb3bd' : lb ? '#b6f5d9' : 'rgba(255,255,255,.7)'; ctx.font = '600 11px Barlow,sans-serif';
+      ctx.fillText(wb ? 'penon au vent se lève : borde' : lb ? 'penon sous le vent décroche : choque' : 'penons : ça file', yx + 60, ty + 6);
     }
   }
 
-  /** Surimpressions de jeu. o = décalage de la vue du ciel (null en 3D). */
-  drawHUD(g: Game, boats: Boat[], me: Boat, o: Off | null): void {
-    const ctx = this.ctx, w = this.VW, h = this.VH, t = g.t;
-    const tg = objective(me, true);
-    if (!o && t >= 0 && me.fin == null) {
+  /** Surimpressions de jeu. toS : projection de la vue du ciel (null en 3D). */
+  drawHUD(g: Game, boats: Boat[], me: Boat, toS: ToScreen | null): void {
+    const ctx = this.ctx, w = this.VW, h = this.VH, t = g.t, c = g.course, N = c.marks.length;
+    const tgm = me.leg >= 1 && me.leg <= N && !me.ocs ? c.marks[me.leg - 1] : null;
+    const tg = tgm ? { x: tgm.x, y: tgm.y } : { x: 0, y: 0 };
+    const dist = Math.hypot(tg.x - me.x, tg.y - me.y);
+    const lbl = me.ocs || me.leg === 0 ? 'Ligne de départ' : me.leg > N ? 'Arrivée' : tgm!.name;
+    const side = tgm ? (tgm.side === 'port' ? 'à laisser à bâbord' : 'à laisser à tribord') : '';
+    if (!toS && t >= 0 && me.fin == null) {
       const bc = w < 520 ? Math.max(w / 2, 216) : w / 2;
-      const rel = norm(Math.atan2(tg.x - me.x, -(tg.y - me.y)) - me.h), lbl = me.ocs || me.leg === 0 ? 'Ligne de départ' : me.leg === 4 ? 'Arrivée' : 'Bouée ' + me.leg;
-      ctx.fillStyle = 'rgba(4,30,50,.6)'; this.rrect(bc - 120, 14, 240, 46, 14); ctx.fill();
-      ctx.save(); ctx.translate(bc - 92, 37); ctx.rotate(rel); ctx.fillStyle = '#ff6a1f'; ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(10, 8); ctx.lineTo(0, 3); ctx.lineTo(-10, 8); ctx.fill(); ctx.restore();
-      ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '800 19px "Barlow Condensed",sans-serif';
-      ctx.fillText(lbl + ' · ' + Math.round(Math.hypot(tg.x - me.x, tg.y - me.y) / 10) + ' m', bc - 70, 30);
+      const rel = norm(Math.atan2(tg.x - me.x, -(tg.y - me.y)) - me.h);
+      this.panel(bc - 140, 14, 280, 50, 14, 0.6);
+      ctx.save(); ctx.translate(bc - 112, 39); ctx.rotate(rel); ctx.fillStyle = '#ff6a1f'; ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(10, 8); ctx.lineTo(0, 3); ctx.lineTo(-10, 8); ctx.fill(); ctx.restore();
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '800 18px "Barlow Condensed",sans-serif';
+      ctx.fillText(lbl + ' · ' + fmtDist(dist), bc - 90, 31);
       ctx.font = '600 12px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.8)';
       const dg = Math.round(rel / D);
-      ctx.fillText(Math.abs(dg) < 6 ? 'droit devant' : Math.abs(dg) + '° à ' + (dg < 0 ? 'gauche' : 'droite'), bc - 70, 48);
+      ctx.fillText((Math.abs(dg) < 6 ? 'droit devant' : Math.abs(dg) + '° à ' + (dg < 0 ? 'gauche' : 'droite')) + (side ? ' · ' + side : ''), bc - 90, 50);
     }
-    const ox = o ? o.ox : 0, oy = o ? o.oy : 0, sx = tg.x + ox, sy = tg.y + oy, m = 34;
-    if (o && me.fin == null && (sx < m || sx > w - m || sy < m || sy > h - m)) {
-      const ang = Math.atan2(sy - h / 2, sx - w / 2), k = Math.min((w / 2 - m) / Math.abs(Math.cos(ang) || 1e-6), (h / 2 - m) / Math.abs(Math.sin(ang) || 1e-6));
-      const ax = w / 2 + Math.cos(ang) * k, ay = h / 2 + Math.sin(ang) * k;
-      ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang); ctx.fillStyle = '#ff6a1f'; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-8, -10); ctx.lineTo(-3, 0); ctx.lineTo(-8, 10); ctx.fill(); ctx.restore();
-      ctx.fillStyle = '#fff'; ctx.font = '600 13px Barlow,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(Math.round(Math.hypot(tg.x - me.x, tg.y - me.y) / 10) + ' m', clamp(ax - Math.cos(ang) * 30, 30, w - 30), clamp(ay - Math.sin(ang) * 24, 14, h - 14));
+    if (toS && me.fin == null) {
+      const [sx, sy] = toS(tg.x, tg.y), m = 34;
+      if (sx < m || sx > w - m || sy < m || sy > h - m) {
+        const ang = Math.atan2(sy - h / 2, sx - w / 2), k = Math.min((w / 2 - m) / Math.abs(Math.cos(ang) || 1e-6), (h / 2 - m) / Math.abs(Math.sin(ang) || 1e-6));
+        const ax = w / 2 + Math.cos(ang) * k, ay = h / 2 + Math.sin(ang) * k;
+        ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang); ctx.fillStyle = '#ff6a1f'; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-8, -10); ctx.lineTo(-3, 0); ctx.lineTo(-8, 10); ctx.fill(); ctx.restore();
+        ctx.fillStyle = '#fff'; ctx.font = '600 13px Barlow,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(lbl + ' · ' + fmtDist(dist), clamp(ax - Math.cos(ang) * 60, 70, w - 70), clamp(ay - Math.sin(ang) * 24, 14, h - 14));
+      }
     }
-    // girouette
-    ctx.save(); ctx.translate(48, 48); ctx.fillStyle = 'rgba(4,30,50,.55)'; ctx.beginPath(); ctx.arc(0, 0, 34, 0, TAU); ctx.fill();
-    ctx.rotate(o ? g.wd : g.wd - me.h); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(0, 14); ctx.stroke();
+    // girouette : vent réel (blanc) et apparent (orange)
+    ctx.save(); ctx.translate(48, 48); this.ctx.fillStyle = 'rgba(4,30,50,.55)'; ctx.beginPath(); ctx.arc(0, 0, 34, 0, TAU); ctx.fill();
+    ctx.rotate(toS ? g.wd : g.wd - me.h); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(0, 14); ctx.stroke();
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(0, 22); ctx.lineTo(-7, 10); ctx.lineTo(7, 10); ctx.fill(); ctx.restore();
-    ctx.save(); ctx.translate(48, 48); ctx.rotate(o ? me.h - me.awa : -me.awa); ctx.strokeStyle = '#ff9a5c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, -6); ctx.stroke();
+    ctx.save(); ctx.translate(48, 48); ctx.rotate(toS ? me.h - me.awa : -me.awa); ctx.strokeStyle = '#ff9a5c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, -6); ctx.stroke();
     ctx.fillStyle = '#ff9a5c'; ctx.beginPath(); ctx.moveTo(0, -4); ctx.lineTo(-5, -13); ctx.lineTo(5, -13); ctx.fill(); ctx.restore();
-    ctx.fillStyle = '#fff'; ctx.font = '800 15px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('VENT ' + Math.round(me.wk) + ' nds', 48, 100);
+    ctx.fillStyle = '#fff'; ctx.font = '800 15px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('VENT ' + Math.round(me.tws) + ' nds', 48, 100);
     {
       const sh = g.wd / D;
-      if (Math.abs(me.twa) < 75 * D && Math.abs(sh) > 2.5 && me.cap <= 0) {
+      if (Math.abs(me.twa) < 75 * D && Math.abs(sh) > 2.5 && me.knock <= 0) {
         const lift = Math.sign(me.twa) * (-sh) > 0;
         ctx.font = '700 12px Barlow,sans-serif'; ctx.fillStyle = lift ? '#3ddc97' : '#f4a261';
         ctx.fillText((lift ? 'ADONNANTE ' : 'REFUSANTE ') + Math.round(Math.abs(sh)) + '°', 48, 117);
-        if (!lift && Math.abs(sh) > 7 && g.simT > g.shiftWarn && t > 0) { g.shiftWarn = g.simT + 25; g.say('Refusante de ' + Math.round(Math.abs(sh)) + '° : pense à virer !'); }
+        if (!lift && Math.abs(sh) > 7 && g.simT > g.shiftWarn && t > 0) { g.shiftWarn = g.simT + 40; g.say('Refusante de ' + Math.round(Math.abs(sh)) + '° : pense à virer !'); }
       }
+    }
+    if (g.timeScale > 1 || g.mode === 'solo') {
+      ctx.font = '800 14px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = g.timeScale > 1 ? '#ffd23f' : 'rgba(255,255,255,.6)'; ctx.fillText('TEMPS ×' + g.timeScale + ' (T)', 48, 136);
     }
     // classement
     const st = g.standings();
     if (st.length > 1 && w > 420) {
-      const rows = st.slice(0, 8), bw = 150, bh = 14 + rows.length * 20, bx = w - bw - 12;
-      ctx.fillStyle = 'rgba(4,30,50,.55)'; this.rrect(bx, 12, bw, bh, 10); ctx.fill();
+      const rows = st.slice(0, 8), bw = 170, bh = 14 + rows.length * 20, bx = w - bw - 12;
+      this.panel(bx, 12, bw, bh, 10, 0.55);
       ctx.font = '600 13px Barlow,sans-serif'; ctx.textBaseline = 'middle';
+      const meD = st.find(e => e.me)!.d;
       rows.forEach((e, i) => {
         const y = 12 + 17 + i * 20;
         ctx.textAlign = 'left'; ctx.fillStyle = e.me ? '#fff' : 'rgba(255,255,255,.8)'; ctx.fillText((i + 1) + '.', bx + 10, y);
         ctx.fillStyle = e.col; ctx.beginPath(); ctx.arc(bx + 34, y, 5, 0, TAU); ctx.fill();
-        ctx.fillStyle = e.me ? '#fff' : 'rgba(255,255,255,.85)'; ctx.fillText((e.me ? 'Toi' : e.name).slice(0, 12) + (e.ocs ? ' ⚑' : ''), bx + 46, y);
-        if (e.fin != null) { ctx.textAlign = 'right'; ctx.fillText('✓', bx + bw - 10, y); }
+        ctx.fillStyle = e.me ? '#fff' : 'rgba(255,255,255,.85)'; ctx.fillText((e.me ? 'Toi' : e.name).slice(0, 10) + (e.ocs ? ' ⚑' : ''), bx + 46, y);
+        ctx.textAlign = 'right';
+        ctx.fillText(e.fin != null ? '✓' : e.me ? '' : (e.d - meD > 0 ? '+' : '−') + fmtDist(Math.abs(e.d - meD)), bx + bw - 10, y);
       });
     }
     // carte
-    const mw = 96, mh = 140, mx = w - mw - 12, my = h - mh - 12, X0 = -1080, X1 = 280, Y0 = -2160, Y1 = 360;
-    const tx = (x: number) => mx + 8 + (x - X0) / (X1 - X0) * (mw - 16), ty = (y: number) => my + 8 + (y - Y0) / (Y1 - Y0) * (mh - 16);
-    ctx.fillStyle = 'rgba(4,30,50,.55)'; this.rrect(mx, my, mw, mh, 10); ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(tx(0), ty(0)); MARKS.forEach(k => ctx.lineTo(tx(k.x), ty(k.y))); ctx.lineTo(tx(0), ty(0)); ctx.stroke(); ctx.setLineDash([]);
-    ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(tx(PIN.x), ty(0)); ctx.lineTo(tx(CMTE.x), ty(0)); ctx.stroke();
-    MARKS.forEach((k, i) => { ctx.fillStyle = me.leg === i + 1 ? '#ffd2b8' : '#ff6a1f'; ctx.beginPath(); ctx.arc(tx(k.x), ty(k.y), me.leg === i + 1 ? 4.5 : 3, 0, TAU); ctx.fill(); });
+    const pts = [{ x: 0, y: 0 }, ...c.marks];
+    let X0 = Math.min(...pts.map(p => p.x)), X1 = Math.max(...pts.map(p => p.x)), Y0 = Math.min(...pts.map(p => p.y)), Y1 = Math.max(...pts.map(p => p.y));
+    const pad = Math.max(X1 - X0, Y1 - Y0) * 0.12 + 300; X0 -= pad; X1 += pad; Y0 -= pad; Y1 += pad;
+    const mh = 150, mw = clamp(mh * (X1 - X0) / (Y1 - Y0), 70, 150), mx = w - mw - 12, my = h - mh - 12;
+    const sc = Math.min((mw - 12) / (X1 - X0), (mh - 12) / (Y1 - Y0)), ox = mx + mw / 2 - (X0 + X1) / 2 * sc, oy = my + mh / 2 - (Y0 + Y1) / 2 * sc;
+    const tx = (x: number) => ox + x * sc, ty = (y: number) => oy + y * sc;
+    this.panel(mx, my, mw, mh, 10, 0.55);
+    ctx.save(); this.rrect(mx, my, mw, mh, 10); ctx.clip();
+    for (const isl of ISLANDS) { ctx.fillStyle = '#5f8456'; ctx.beginPath(); ctx.arc(tx(isl.x), ty(isl.y), Math.max(1.5, isl.r * sc), 0, TAU); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(tx(0), ty(0)); c.marks.forEach(k => ctx.lineTo(tx(k.x), ty(k.y))); ctx.lineTo(tx(0), ty(0)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(tx(c.pin.x), ty(0)); ctx.lineTo(tx(c.cmte.x), ty(0)); ctx.stroke();
+    c.marks.forEach((k, i) => { ctx.fillStyle = me.leg === i + 1 ? '#ffd2b8' : '#ff6a1f'; ctx.beginPath(); ctx.arc(tx(k.x), ty(k.y), me.leg === i + 1 ? 4.5 : 3, 0, TAU); ctx.fill(); });
     const dotB = (b: Boat, r: number) => { ctx.fillStyle = b.col; ctx.beginPath(); ctx.arc(clamp(tx(b.x), mx + 4, mx + mw - 4), clamp(ty(b.y), my + 4, my + mh - 4), r, 0, TAU); ctx.fill(); };
     for (const b of boats) if (b !== me) dotB(b, 2.5);
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; dotB(me, 4); ctx.stroke();
+    ctx.restore();
     // compte à rebours
     if (t < 0) {
-      const n = Math.ceil(-t); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = 'rgba(4,30,50,.6)'; this.rrect(w / 2 - 90, 14, 180, 74, 16); ctx.fill();
-      ctx.fillStyle = n <= 5 ? '#ffd23f' : '#fff'; ctx.font = '800 44px "Barlow Condensed",sans-serif'; ctx.fillText('0:' + String(n).padStart(2, '0'), w / 2, 44);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      this.panel(w / 2 - 90, 14, 180, 74, 16, 0.6);
+      ctx.fillStyle = -t <= 10 ? '#ffd23f' : '#fff'; ctx.font = '800 44px "Barlow Condensed",sans-serif'; ctx.fillText(fmt(t), w / 2, 44);
       ctx.font = '600 12px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText('Reste sous la ligne', w / 2, 74);
     }
-    if (me.fin == null) this.drawTrim(me, w, h);
-    if (me.cap > 0) {
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '800 20px "Barlow Condensed",sans-serif'; ctx.fillStyle = 'rgba(232,56,79,.92)';
-      this.rrect(w / 2 - 150, h - 204, 300, 38, 19); ctx.fill(); ctx.fillStyle = '#fff'; ctx.fillText('DESSALÉ · redressage ' + Math.ceil(me.cap) + ' s', w / 2, h - 185);
+    if (me.fin == null) this.drawTrim(me, g.assist.sheets, w, h);
+    // manœuvre en cours
+    if (me.task) {
+      const T = me.task, p = clamp(T.t / T.dur, 0, 1), txt = T.kind === 'head' ? 'Changement de voile → ' + me.cls.heads[T.to].name : (T.to > T.from ? 'Prise du ' + T.to + (T.to > 1 ? 'e' : 'er') + ' ris' : 'Largage de ris');
+      const bw = 300, bx = w / 2 - bw / 2, by = h - 124 - 12 - 46;
+      this.panel(bx, by, bw, 38, 12, 0.75);
+      ctx.fillStyle = 'rgba(255,214,120,.35)'; this.rrect(bx + 4, by + 4, (bw - 8) * p, 30, 9); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = '700 14px Barlow,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(txt + ' · ' + Math.ceil(T.dur - T.t) + ' s', w / 2, by + 19);
     }
-    if (me.ocs && t >= 0) {
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '800 18px "Barlow Condensed",sans-serif'; ctx.fillStyle = 'rgba(232,56,79,.9)';
-      this.rrect(w / 2 - 130, h - 158, 260, 34, 17); ctx.fill(); ctx.fillStyle = '#fff'; ctx.fillText('DÉPART ANTICIPÉ · repasse sous la ligne', w / 2, h - 141);
-    }
+    const banner = (txt: string, y: number, col = 'rgba(232,56,79,.92)') => {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '800 19px "Barlow Condensed",sans-serif';
+      const tw = ctx.measureText(txt).width + 40; ctx.fillStyle = col; this.rrect(w / 2 - tw / 2, y, tw, 36, 18); ctx.fill(); ctx.fillStyle = '#fff'; ctx.fillText(txt, w / 2, y + 18);
+    };
+    if (me.knock > 0) banner('COUCHÉ · le bateau se redresse dans ' + Math.ceil(me.knock) + ' s', h - 230);
+    else if (me.aground > 0) banner('ÉCHOUÉ · dégagement dans ' + Math.ceil(me.aground) + ' s', h - 230);
+    else if (me.broach > 0) banner('DÉPART AU LOF', h - 230);
+    if (me.ocs && t >= 0) banner('DÉPART ANTICIPÉ · repasse sous la ligne', h - 270);
     if (g.msgT > 0) {
-      const yy = t < 0 ? 100 : o ? 16 : 70;
-      ctx.globalAlpha = Math.min(1, g.msgT * 2); ctx.font = '800 22px "Barlow Condensed",sans-serif';
-      const tw = ctx.measureText(g.msg).width + 32; ctx.fillStyle = 'rgba(4,30,50,.72)'; this.rrect(w / 2 - tw / 2, yy, tw, 38, 19); ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(g.msg, w / 2, yy + 20); ctx.globalAlpha = 1;
+      const yy = t < 0 ? 100 : toS ? 16 : 72;
+      ctx.globalAlpha = Math.min(1, g.msgT * 2); ctx.font = '800 20px "Barlow Condensed",sans-serif';
+      const tw = Math.min(w - 20, ctx.measureText(g.msg).width + 32); this.panel(w / 2 - tw / 2, yy, tw, 36, 18, 0.75);
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(g.msg, w / 2, yy + 19, w - 40); ctx.globalAlpha = 1;
     }
+    void app;
   }
 }
