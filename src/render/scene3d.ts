@@ -12,6 +12,7 @@ T.ColorManagement.enabled = false;
 const f = (v: number) => v.toFixed(5);
 
 import { HZ, HW, deckY, MAST_Z, DECK, WINCHES, TRAV_T, buildImoca, mainTex, headTex, mats } from './imoca';
+import { Rope, braidTex } from './rope';
 
 const NU = 12, NV = 22;
 
@@ -19,7 +20,10 @@ interface Rec {
   yaw: T.Group; roll: T.Group; boomG: T.Group; mast: T.Mesh; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[];
   mg: T.BufferGeometry; hg: T.BufferGeometry; hmesh: T.Mesh<T.BufferGeometry, T.MeshStandardMaterial>;
   sailor: T.Group; armL: T.Mesh; armR: T.Mesh; head: T.Mesh;
-  car: T.Mesh; tiller: T.Group; ropes: T.LineSegments; ropePos: Float32Array; ropeCol: Float32Array; clew: T.Vector3;
+  car: T.Mesh; tiller: T.Group; winches: { g: T.Group; i: number; sx: number }[];
+  /** Cordages en 3D (bateau du joueur). */
+  tubes?: { lee: Rope; wind: Rope; main: Rope; light: T.PointLight; lastHead: number; lastMain: number; lastLee: number };
+  ropes: T.LineSegments; ropePos: Float32Array; ropeCol: Float32Array; clew: T.Vector3;
   /** Skipper : position sur le pont (x, t), activité et minuterie. */
   sk: { x: number; t: number; mode: 'helm' | 'grind' | 'pedestal'; timer: number; tack: number };
   lb: T.Sprite; name: string; heel: number; used: boolean; sideS?: number; prevS?: number; headId: string;
@@ -49,6 +53,13 @@ export class Scene3D {
   private flecks: { g: T.BufferGeometry; pos: Float32Array; age: Float32Array; n: number };
   private fleckXZ: Float32Array;
   private shake = 0;
+  /** Repères de la prochaine marque : colonne de lumière, chevron flottant, flèches de contournement. */
+  private beam!: T.Mesh<T.CylinderGeometry, T.ShaderMaterial>;
+  private chevron!: T.Mesh;
+  private arcArrows: T.Mesh<T.ShapeGeometry, T.MeshBasicMaterial>[] = [];
+  private arcKey = '';
+  private arcPts: { x: number; z: number; h: number }[] = [];
+  private projV = new T.Vector3();
   private arrow!: T.Mesh<T.ShapeGeometry, T.MeshBasicMaterial>;
   private drops: Drop[] = [];
   private gTimer = 0; private camYaw: number | null = null; private lastFov = 0;
@@ -182,6 +193,24 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       this.arrow = new T.Mesh(ag, new T.MeshBasicMaterial({ color: '#50ff96', transparent: true, opacity: 0.55, depthWrite: false, fog: false, side: T.DoubleSide }));
       this.arrow.renderOrder = 5; scene.add(this.arrow);
     }
+    // colonne de lumière qui pulse au-dessus de la prochaine marque
+    this.beam = new T.Mesh(new T.CylinderGeometry(5, 5, 140, 24, 1, true), new T.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: T.NormalBlending, side: T.DoubleSide, fog: false,
+      uniforms: { t: { value: 0 }, col: { value: new T.Color('#ff5a0a') } },
+      vertexShader: 'varying vec2 vU;void main(){vU=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader: 'uniform float t;uniform vec3 col;varying vec2 vU;void main(){float a=pow(1.-vU.y,1.3)*(.6+.2*sin(t*3.))+.3*smoothstep(.02,0.,abs(fract(vU.y*4.-t*.6)-.5)-.45)*(1.-vU.y);gl_FragColor=vec4(mix(col,vec3(1.,.85,.5),.25),clamp(a*.85,0.,.85));}',
+    }));
+    this.beam.position.y = 70; this.beam.renderOrder = 6; scene.add(this.beam);
+    this.chevron = new T.Mesh(new T.ConeGeometry(2.4, 5, 4), new T.MeshBasicMaterial({ color: '#ff7a2a', fog: false }));
+    this.chevron.rotation.x = Math.PI; scene.add(this.chevron);
+    {
+      const sh = new T.Shape(); sh.moveTo(0, -3); sh.lineTo(3, 0.5); sh.lineTo(1.6, 0.5); sh.lineTo(0, -1.2); sh.lineTo(-1.6, 0.5); sh.lineTo(-3, 0.5); sh.closePath();
+      const ag = new T.ShapeGeometry(sh); ag.rotateX(Math.PI / 2);
+      for (let i = 0; i < 12; i++) {
+        const m = new T.Mesh(ag, new T.MeshBasicMaterial({ color: '#ffd23f', transparent: true, opacity: 0.8, depthWrite: false, side: T.DoubleSide, fog: false }));
+        m.renderOrder = 5; scene.add(m); this.arcArrows.push(m);
+      }
+    }
     let drag: { x: number; y: number } | null = null;
     canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; try { canvas.setPointerCapture(e.pointerId); } catch { /* */ } });
     canvas.addEventListener('pointermove', e => {
@@ -251,7 +280,12 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     const g = new T.Group(), m = new T.MeshPhongMaterial({ color: col, shininess: 40 });
     const c = new T.Mesh(new T.CylinderGeometry(1.1 * s, 1.3 * s, 3 * s, 20), m); c.position.y = 1 * s; g.add(c);
     const tp = new T.Mesh(new T.SphereGeometry(1.1 * s, 18, 9), m); tp.position.y = 2.5 * s; g.add(tp);
-    if (txt) { const sp = this.label(txt, 'rgba(255,106,31,.9)'); sp.position.y = 8; sp.scale.set(0.2, 0.025, 1); g.add(sp); }
+    if (txt) {
+      const pole = new T.Mesh(new T.CylinderGeometry(0.06 * s, 0.08 * s, 6 * s, 8), new T.MeshStandardMaterial({ color: '#e9eef2', roughness: 0.4 })); pole.position.y = 5.5 * s; g.add(pole);
+      const fl = new T.Mesh(new T.PlaneGeometry(1.8 * s, 1.1 * s), new T.MeshBasicMaterial({ color: col, side: T.DoubleSide })); fl.position.set(0.95 * s, 7.8 * s, 0); g.add(fl);
+      g.userData.flag = fl;
+      const sp = this.label(txt, 'rgba(255,106,31,.9)'); sp.position.y = 12 * s; sp.scale.set(0.2, 0.025, 1); g.add(sp);
+    }
     return g;
   }
 
@@ -312,7 +346,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     const rg = new T.BufferGeometry(); rg.setAttribute('position', new T.BufferAttribute(ropePos, 3)); rg.setAttribute('color', new T.BufferAttribute(ropeCol, 3));
     const ropes = new T.LineSegments(rg, new T.LineBasicMaterial({ vertexColors: true })); ropes.frustumCulled = false; roll.add(ropes);
     return { yaw, roll, boomG: parts.boomG, mast: parts.mast, keelG: parts.keelG, foilP: parts.foilP, foilS: parts.foilS, ruds: parts.ruds, mg, hg, hmesh, sailor, armL, armR, head, lb, name: b.name, heel: 0, used: true, headId: '',
-      car: parts.car, tiller: parts.tiller, ropes, ropePos, ropeCol, clew: new T.Vector3(), sk: { x: -1.6, t: 0.955, mode: 'helm', timer: 0, tack: 0 } };
+      car: parts.car, tiller: parts.tiller, winches: parts.winches, ropes, ropePos, ropeCol, clew: new T.Vector3(), sk: { x: -1.6, t: 0.955, mode: 'helm', timer: 0, tack: 0 } };
   }
 
   /** Grand-voile : guindant le long du mât, bordure sur la bôme, rond de chute et tête carrée. */
@@ -420,7 +454,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     r.tiller.rotation.y = b.rud * 0.8;
     this.animSkipper(r, b, dt, tack);
     r.sailor.visible = b.knock <= 0 && !(isMe && pov);
-    this.updateRopes(r, b, ss, tm);
+    this.updateRopes(r, b, ss, tm, isMe);
     r.head.visible = !(isMe && pov);
     r.lb.visible = !isMe; r.used = true;
     if (isMe && r.hmesh.visible) this.setTells(r, b, ss, tm);
@@ -460,55 +494,96 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     } else { r.armL.rotation.x = 1.1 + Math.sin(ph * 0.8) * 0.75; r.armR.rotation.x = 1.1 + Math.sin(ph * 0.8 + Math.PI) * 0.75; }
   }
 
-  /** Écoutes de voile d'avant (bordée sous le vent, molle au vent), grand-écoute, tours sur les winchs. */
-  private updateRopes(r: Rec, b: Boat, ss: number, tm: number): void {
-    const P = r.ropePos, Cc = r.ropeCol; let n = 0;
-    const max = P.length / 6;
-    const seg = (a: number[], c: number[], col: number[]) => { if (n >= max) return; P.set(a, n * 6); P.set(c, n * 6 + 3); Cc.set(col, n * 6); Cc.set(col, n * 6 + 3); n++; };
-    const line = (a: number[], c: number[], sag: number, col: number[], k = 10, floorY?: number) => {
-      let prev = a;
+  private ropeMats: { lee: T.MeshStandardMaterial; wind: T.MeshStandardMaterial; main: T.MeshStandardMaterial } | null = null;
+
+  /** Cordages 3D du bateau du joueur, et lumière sous la casquette. */
+  private makeTubes(r: Rec): NonNullable<Rec['tubes']> {
+    if (!this.ropeMats) this.ropeMats = {
+      lee: new T.MeshStandardMaterial({ map: braidTex('#ff6a1f', '#ffd0a8'), roughness: 0.8 }),
+      wind: new T.MeshStandardMaterial({ map: braidTex('#2f7de1', '#bcd8ff'), roughness: 0.8 }),
+      main: new T.MeshStandardMaterial({ map: braidTex('#f2f2ee', '#3a4a5a'), roughness: 0.8 }),
+    };
+    const lee = new Rope(170, 0.016, this.ropeMats.lee), wind = new Rope(150, 0.014, this.ropeMats.wind), main = new Rope(110, 0.014, this.ropeMats.main);
+    r.roll.add(lee.mesh, wind.mesh, main.mesh);
+    const light = new T.PointLight('#dff0ff', 2.2, 6, 1.5); light.position.set(0, deckY(0.76, 0) + 1.25, HZ(0.76)); r.roll.add(light);
+    return { lee, wind, main, light, lastHead: -1, lastMain: -1, lastLee: 0 };
+  }
+
+  /**
+   * Écoutes de voile d'avant (bordée sous le vent, molle au vent qui faseye), grand-écoute en palan.
+   * Une seule polyligne par cordage : point d'écoute → poulie de renvoi → tours sur le winch → mou lové dans le cockpit.
+   */
+  private updateRopes(r: Rec, b: Boat, ss: number, tm: number, detailed: boolean): void {
+    const lee = ss >= 0 ? 1 : -1, wp = WINCHES[0], aws = b.aws;
+    const winch = (sx: number) => { const t = wp.t, x = sx * wp.x; return [x, deckY(t, x / HW(t)), HZ(t)]; };
+    const curve = (out: number[][], a: number[], c: number[], sag: number, k: number, flut = 0, floorY = -9) => {
       for (let i = 1; i <= k; i++) {
-        const u = i / k; let y = a[1] + (c[1] - a[1]) * u - sag * 4 * u * (1 - u);
-        const x = a[0] + (c[0] - a[0]) * u, z = a[2] + (c[2] - a[2]) * u;
-        if (floorY !== undefined) y = Math.max(y, floorY);
-        const p = [x, y, z]; seg(prev, p, col); prev = p;
+        const u = i / k, w = 4 * u * (1 - u);
+        let y = a[1] + (c[1] - a[1]) * u - sag * w;
+        const fx = flut ? Math.sin(tm * 7 + u * 9) * flut * w : 0, fy = flut ? Math.cos(tm * 5.3 + u * 7) * flut * 0.6 * w : 0;
+        y = Math.max(y + fy, floorY);
+        out.push([a[0] + (c[0] - a[0]) * u + fx, y, a[2] + (c[2] - a[2]) * u]);
       }
     };
-    const wrap = (x: number, y: number, z: number, rad: number, turns: number, col: number[]) => {
-      let prev = [x + rad, y, z];
-      for (let i = 1; i <= turns * 14; i++) { const a = i / 14 * Math.PI * 2, p = [x + Math.cos(a) * rad, y + i / (turns * 14) * 0.18, z + Math.sin(a) * rad]; seg(prev, p, col); prev = p; }
-      return prev;
+    const wrap = (out: number[][], c: number[], rad: number, turns: number, dir: number) => {
+      const steps = Math.round(turns * 16), a0 = dir > 0 ? Math.PI : 0;
+      for (let i = 0; i <= steps; i++) { const a = a0 + dir * i / 16 * Math.PI * 2; out.push([c[0] + Math.cos(a) * rad, c[1] + 0.1 + i / steps * 0.16, c[2] + Math.sin(a) * rad]); }
     };
-    const ORANGE = [1, 0.45, 0.15], BLUE = [0.25, 0.55, 1], WHITE = [0.92, 0.92, 0.88];
-    const lee = ss >= 0 ? 1 : -1, wp = WINCHES[0];
-    const winch = (sx: number) => { const t = wp.t, x = sx * wp.x; return [x, deckY(t, x / HW(t)) + 0.08, HZ(t)]; };
-    // voile d'avant
+    const coil = (out: number[][], c: number[], turns: number) => {
+      const steps = Math.round(turns * 14);
+      for (let i = 0; i <= steps; i++) { const a = i / 14 * Math.PI * 2, rr = 0.24 - 0.12 * i / steps; out.push([c[0] + Math.cos(a) * rr, c[1] + 0.02 + i * 0.002, c[2] + Math.sin(a) * rr]); }
+    };
+    const jibLee: number[][] = [], jibWind: number[][] = [];
     if (b.headPow > 0.05) {
       const id = b.cls.heads[b.head].id, big = id === 'C0' || id === 'A3', lt = big ? 0.72 : 0.5;
-      const lead = (sx: number) => [sx * HW(lt) * (big ? 0.96 : 0.8), deckY(lt, big ? 0.96 : 0.8) + 0.08, HZ(lt)];
+      const lead = (sx: number) => [sx * HW(lt) * (big ? 0.96 : 0.8), deckY(lt, big ? 0.96 : 0.8) + 0.1, HZ(lt)];
       const clew = [r.clew.x, r.clew.y, r.clew.z];
-      // écoute bordée, sous le vent
+      // écoute bordée : légère vibration sous la tension
+      const vib = Math.min(0.02, aws * 0.0008);
       const Ll = lead(lee), Wl = winch(lee);
-      line(clew, Ll, 0.05, ORANGE, 6); line(Ll, [Wl[0] - lee * wp.r, Wl[1] + 0.2, Wl[2]], 0.02, ORANGE, 3);
-      const end = wrap(Wl[0], Wl[1], Wl[2], wp.r + 0.01, 3, ORANGE);
-      line(end, [lee * 1.0, deckY(0.85, 0.4) + 0.02, HZ(0.86)], 0.25, ORANGE, 5); // mou dans le cockpit
-      // écoute molle, au vent
+      jibLee.push(clew); curve(jibLee, clew, Ll, 0.04, 12, vib);
+      curve(jibLee, Ll, [Wl[0] - lee * wp.r, Wl[1] + 0.1, Wl[2]], 0.02, 8);
+      wrap(jibLee, Wl, wp.r + 0.018, 3, lee);
+      const tailFloor = deckY(0.85, 0.35), cp = [lee * 0.75, tailFloor, HZ(0.87)];
+      curve(jibLee, jibLee[jibLee.length - 1], cp, 0.1, 8, 0, tailFloor + 0.02);
+      coil(jibLee, cp, 2.5);
+      // écoute au vent : molle, elle faseye dans le vent apparent
+      const flap = 0.08 + Math.min(0.35, aws * 0.012);
       const Lw = lead(-lee), Ww = winch(-lee);
-      line(clew, Lw, 1.2, BLUE, 10, deckY(0.3, 0) - 0.4); line(Lw, [Ww[0] + lee * wp.r, Ww[1] + 0.2, Ww[2]], 0.15, BLUE, 4);
-      wrap(Ww[0], Ww[1], Ww[2], wp.r + 0.01, 1, BLUE);
+      jibWind.push(clew); curve(jibWind, clew, Lw, 1.4, 22, flap, deckY(0.3, 0) - 0.35);
+      curve(jibWind, Lw, [Ww[0] + lee * wp.r, Ww[1] + 0.1, Ww[2]], 0.18, 8, flap * 0.3);
+      wrap(jibWind, Ww, wp.r + 0.016, 1, -lee);
+      const cw = [-lee * 0.8, deckY(0.87, 0.4), HZ(0.9)];
+      curve(jibWind, jibWind[jibWind.length - 1], cw, 0.1, 6, 0, cw[1] + 0.02); coil(jibWind, cw, 1.5);
     }
-    // grand-écoute : bout de bôme → chariot (palan) → winch de colonne
+    // grand-écoute : palan à 4 brins entre le bout de bôme et le chariot, puis vers la colonne
+    const main: number[][] = [];
     {
       const ba = r.boomG.rotation.y, bp = r.boomG.position;
-      const be = [bp.x + Math.sin(ba) * 6.6, bp.y - 0.25, bp.z + Math.cos(ba) * 6.6];
-      const car = r.car.position, cp = [car.x, car.y + 0.05, car.z];
-      for (const o of [-0.06, 0, 0.06]) seg([be[0] + o, be[1], be[2]], [cp[0] + o, cp[1], cp[2]], WHITE);
-      line(cp, [0, deckY(0.8, 0) + 0.95, HZ(0.8)], 0.3, WHITE, 6);
+      const be = [bp.x + Math.sin(ba) * 6.6, bp.y - 0.2, bp.z + Math.cos(ba) * 6.6];
+      const car = r.car.position, cp = [car.x, car.y + 0.06, car.z];
+      for (let i = 0; i < 4; i++) { const o = (i - 1.5) * 0.05, top = [be[0] + o, be[1], be[2]], bot = [cp[0] + o, cp[1], cp[2]]; main.push(i % 2 ? bot : top, i % 2 ? top : bot); }
+      curve(main, main[main.length - 1], [0, deckY(0.8, 0) + 0.95, HZ(0.8)], 0.35, 10);
     }
-    // drisses et bosses de ris le long du mât (légère vibration)
-    const fl = Math.sin(tm * 3) * 0.01;
-    seg([0.12, DECK + 1.2, MAST_Z + 0.3], [0.12 + fl, DECK + 26, MAST_Z + 0.3], WHITE);
-    for (let i = n; i < max; i++) { P.fill(0, i * 6, i * 6 + 6); }
+    if (detailed) {
+      const T2 = r.tubes ?? (r.tubes = this.makeTubes(r));
+      T2.lee.update(jibLee); T2.wind.update(jibWind); T2.main.update(main);
+      // le cordage défile quand on borde ou choque, le winch tourne
+      const M = this.ropeMats!;
+      if (T2.lastHead >= 0) {
+        const dh = b.headSheet - T2.lastHead, dm = b.mainSheet - T2.lastMain;
+        (M.lee.map as T.Texture).offset.x -= dh * 60; (M.main.map as T.Texture).offset.x -= dm * 40;
+        for (const w of r.winches) if (w.i === 0 && w.sx === lee) w.g.rotation.y += dh * 25;
+      }
+      if (T2.lastLee !== lee) T2.lastLee = lee;
+      T2.lastHead = b.headSheet; T2.lastMain = b.mainSheet;
+      r.ropes.visible = false;
+      return;
+    }
+    // bateaux lointains : simples traits
+    const P = r.ropePos, Cc = r.ropeCol, max = P.length / 6; let n = 0;
+    const strip = (pts: number[][], col: number[]) => { for (let i = 1; i < pts.length && n < max; i++) { P.set(pts[i - 1], n * 6); P.set(pts[i], n * 6 + 3); Cc.set(col, n * 6); Cc.set(col, n * 6 + 3); n++; } };
+    strip(jibLee, [1, 0.45, 0.15]); strip(jibWind, [0.25, 0.55, 1]); strip(main, [0.92, 0.92, 0.88]);
     r.ropes.geometry.setDrawRange(0, n * 2);
     r.ropes.geometry.attributes.position.needsUpdate = true; r.ropes.geometry.attributes.color.needsUpdate = true;
   }
@@ -591,6 +666,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     this.cb.position.y = this.wh(this.cb.position.x, 0) * 0.5; this.cb.rotation.z = Math.sin(tm * 0.9) * 0.03;
     const nm = !g.demo && !me.ocs && me.leg >= 1 && me.leg <= g.course.marks.length ? g.course.marks[me.leg - 1] : null;
     this.ring.visible = !!nm && nm.island == null;
+    this.updateMarkers(g, nm, tm);
     if (nm) { this.ring.position.set(nm.x, 0.6, nm.y); this.ring.material.opacity = 0.35 + 0.25 * Math.sin(tm * 4); }
     this.line.material.opacity = me.leg === 0 || me.leg > g.course.marks.length || me.ocs ? 0.95 : 0.3;
     this.flagM.color.set(g.t < 0 ? '#3d7bd9' : '#ff6a1f');
@@ -610,6 +686,45 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     }
     this.sun.position.set(me.x + this.sunDir.x * 100, this.sunDir.y * 100, me.y + this.sunDir.z * 100); this.sun.target.position.set(me.x, 0, me.y);
     this.ren.render(this.scene, cam);
+  }
+
+  /** Repères visuels de la prochaine marque (et drapeaux qui flottent). */
+  private updateMarkers(g: Game, nm: Game['course']['marks'][number] | null, tm: number): void {
+    for (const o of this.marks3) { const fl = o.userData.flag as T.Mesh | undefined; if (fl) { fl.rotation.y = Math.sin(tm * 4 + o.position.x) * 0.35 - g.wd; } }
+    const show = !!nm;
+    this.beam.visible = this.chevron.visible = show;
+    for (const a of this.arcArrows) a.visible = show;
+    if (!nm) return;
+    const isl = nm.island != null, base = isl ? nm.wp[1] : nm;
+    this.beam.position.set(base.x, 70, base.y); this.beam.material.uniforms.t.value = tm;
+    this.chevron.position.set(base.x, (isl ? 60 : 22) + Math.sin(tm * 2.5) * 1.5, base.y); this.chevron.rotation.y = tm * 1.5;
+    this.chevron.scale.setScalar(isl ? 4 : 1);
+    // arc de contournement : approche → extérieur → sortie, dans le sens où il faut tourner
+    const key = g.course.id + ':' + nm.name + nm.x;
+    if (key !== this.arcKey) {
+      this.arcKey = key; this.arcPts = [];
+      const R = isl ? Math.hypot(nm.wp[1].x - nm.x, nm.wp[1].y - nm.y) : 40;
+      const ang = nm.wp.map(w => Math.atan2(w.y - nm.y, w.x - nm.x));
+      const d1 = norm(ang[1] - ang[0]), d2 = norm(ang[2] - ang[1]), total = d1 + d2, n = this.arcArrows.length;
+      for (let i = 0; i < n; i++) {
+        const f = (i + 0.5) / n * total, a = ang[0] + f, dir = Math.sign(total) || 1;
+        const x = nm.x + Math.cos(a) * R, z = nm.y + Math.sin(a) * R;
+        const tx = -Math.sin(a) * dir, tz = Math.cos(a) * dir; // tangente dans le sens du contournement
+        this.arcPts.push({ x, z, h: Math.atan2(tx, -tz) });
+      }
+    }
+    const sc = isl ? 7 : 2.4;
+    this.arcArrows.forEach((m, i) => {
+      const p = this.arcPts[i]; m.position.set(p.x, this.wh(p.x, p.z) * 0.8 + 0.5, p.z); m.rotation.y = -p.h; m.scale.setScalar(sc);
+      const ph = ((tm * 0.9 - i / this.arcArrows.length) % 1 + 1) % 1;
+      m.material.opacity = 0.25 + 0.75 * Math.pow(1 - ph, 3);
+    });
+  }
+
+  /** Projection monde → écran (pixels CSS), pour les marqueurs de l'interface. */
+  project(x: number, y: number, z: number, w: number, h: number): { x: number; y: number; behind: boolean } {
+    const v = this.projV.set(x, y, z).project(this.cam);
+    return { x: (v.x + 1) / 2 * w, y: (1 - v.y) / 2 * h, behind: v.z > 1 };
   }
 
   private setFov(target: number, dt: number): void {

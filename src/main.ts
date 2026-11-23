@@ -252,7 +252,7 @@ function draw(g: Game, dt: number, alpha: number): void {
   if (app.view !== 'top' && R3) {
     c2d.clear();
     try { R3.render(g, boats, me, dt, rt, app.view); } catch (e) { console.error(e); R3 = null; setView('top'); }
-    if (!g.demo) c2d.drawHUD(g, boats, me, null);
+    if (!g.demo && R3) { const r3 = R3; c2d.drawHUD(g, boats, me, null, (x, y, z) => r3.project(x, y, z, c2d.VW, c2d.VH)); }
   } else {
     const toS = c2d.drawTop(g, boats, me);
     if (!g.demo) c2d.drawHUD(g, boats, me, toS);

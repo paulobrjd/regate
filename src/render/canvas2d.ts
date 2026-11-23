@@ -309,13 +309,32 @@ export class Canvas2D {
   }
 
   /** Surimpressions de jeu. toS : projection de la vue du ciel (null en 3D). */
-  drawHUD(g: Game, boats: Boat[], me: Boat, toS: ToScreen | null): void {
+  drawHUD(g: Game, boats: Boat[], me: Boat, toS: ToScreen | null, proj?: (x: number, y: number, z: number) => { x: number; y: number; behind: boolean }): void {
     const ctx = this.ctx, w = this.VW, h = this.VH, t = g.t, c = g.course, N = c.marks.length;
     const tgm = me.leg >= 1 && me.leg <= N && !me.ocs ? c.marks[me.leg - 1] : null;
     const tg = tgm ? { x: tgm.x, y: tgm.y } : { x: 0, y: 0 };
     const dist = Math.hypot(tg.x - me.x, tg.y - me.y);
     const lbl = me.ocs || me.leg === 0 ? 'Ligne de départ' : me.leg > N ? 'Arrivée' : tgm!.name;
     const side = tgm ? (tgm.side === 'port' ? 'à laisser à bâbord' : 'à laisser à tribord') : '';
+    // losange de la marque visée, qui la suit à l'écran (et reste au bord quand elle est hors champ)
+    if (proj && t >= 0 && me.fin == null) {
+      const isl = tgm && tgm.island != null, base = isl ? tgm!.wp[1] : tg;
+      const p = proj(base.x, isl ? 60 : 14, base.y);
+      let x = p.x, y = p.y; const m = 40, off = p.behind || x < m || x > w - m || y < m || y > h - m;
+      if (p.behind) { x = w - x; y = h - m; }
+      x = clamp(x, m + 50, w - m - 50); y = clamp(y, m + 60, h - m - 30);
+      { const R = this.ring; if (R.r && x > R.x - R.r - 70 && y > R.y - R.r - 100) y = R.y - R.r - 110; } // pas sur la boussole
+      if (x < 190 && y < 210) y = 210; // ni sur le bouton plein écran
+      const pul = 0.8 + 0.2 * Math.sin(this.rt * 5);
+      ctx.save(); ctx.translate(x, y);
+      if (off) { const a = Math.atan2(y - h / 2, x - w / 2); ctx.rotate(a); ctx.fillStyle = '#ff7a2a'; ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-6, -12); ctx.lineTo(-6, 12); ctx.fill(); ctx.rotate(-a); }
+      else { ctx.rotate(Math.PI / 4); ctx.strokeStyle = `rgba(255,122,42,${pul})`; ctx.lineWidth = 3; ctx.strokeRect(-11, -11, 22, 22); ctx.fillStyle = 'rgba(255,122,42,.35)'; ctx.fillRect(-11, -11, 22, 22); ctx.rotate(-Math.PI / 4); }
+      ctx.font = '800 15px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      const lb = fmtDist(dist) + (side ? (tgm!.side === 'port' ? ' · ◀ bâbord' : ' · tribord ▶') : '');
+      const tw = ctx.measureText(lb).width + 14; ctx.fillStyle = 'rgba(4,30,50,.7)'; this.rrect(-tw / 2, 18, tw, 20, 10); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fillText(lb, 0, 21);
+      ctx.restore();
+    }
     if (!toS && t >= 0 && me.fin == null) {
       const bc = w < 520 ? Math.max(w / 2, 216) : w / 2;
       const rel = norm(Math.atan2(tg.x - me.x, -(tg.y - me.y)) - me.h);

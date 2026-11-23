@@ -99,7 +99,7 @@ export function hullDrag(cls: BoatClass, V: number, disp: number, heel: number):
   const hd = heel / DEG;
   // au-delà de ~27 nds : ventilation des appendices, embruns (croît très vite)
   const Rhs = 400 * (v / 14) ** 6;
-  return (Rf + Rw + Rhs) * (1 + 0.6 * Math.max(0, hd - 18) / 15) * Math.sign(V || 1);
+  return (Rf + Rw + Rhs) * (1 + 0.45 * Math.max(0, hd - 22) / 15) * Math.sign(V || 1);
 }
 
 /** Toutes les forces pour un vent réel (tws m/s, twa rad signé) et une vitesse V (m/s). */
@@ -191,7 +191,7 @@ function candidates(cls: BoatClass): Config[] {
   return out;
 }
 
-const MAX_HEEL = 28 * DEG;
+const MAX_HEEL = 30 * DEG;
 
 /**
  * Pour chaque point de la polaire, choisit la configuration qui maximise le rapport
@@ -209,11 +209,12 @@ export function calibrate(cls: BoatClass): Calibration {
       for (const c of cands) {
         const { f } = evalIdeal(cls, c, tws, twa, V);
         if (Number.isNaN(f.heelEq) || f.heelEq > MAX_HEEL || f.drive <= 0) continue;
-        const r = f.drive / (f.hull + f.induced + f.foilDrag);
+        // la configuration la plus rapide : celle qui garde le plus de poussée nette à la vitesse cible
+        const r = f.drive - (f.hull + f.induced + f.foilDrag);
         if (r > bR) { bR = r; bC = c; bF = f; }
       }
       best[i].push(bC);
-      eta[i].push(bF ? clamp(1 / bR, 0.25, 4) : 1);
+      eta[i].push(bF ? clamp((bF.hull + bF.induced + bF.foilDrag) / bF.drive, 0.25, 4) : 1);
     }
   }
   // angles trop près du vent pour un équilibre : on reprend la ligne de 38°
@@ -250,7 +251,7 @@ export function bestConfig(cal: Calibration, twsKn: number, twaDeg: number): Con
   for (const cand of cands) {
     const { f } = evalIdeal(cal.cls, cand, tws, twa, V);
     if (Number.isNaN(f.heelEq) || f.heelEq > MAX_HEEL + 4 * DEG || f.drive <= 0) continue;
-    const r = f.drive / (f.hull + f.induced + f.foilDrag);
+    const r = f.drive * etaAt(cal, w, a) - (f.hull + f.induced + f.foilDrag);
     if (r > bR) { bR = r; c = cand; }
   }
   bestCache.set(key, c);
