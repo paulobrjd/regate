@@ -20,12 +20,14 @@ export interface AI {
   wpi: number; legSeen: number; lastTack: number; back: boolean; mem: AssistMem;
   /** Point de sortie de la marque qu'on vient de passer (on finit le contournement avant de filer). */
   exit: { x: number; y: number } | null;
+  /** Amure visée (+1 bâbord, -1 tribord) : on la garde pendant que le bateau vire. */
+  k: number;
 }
 
 export function mkAI(L: Level, home: number, rng: Rng, mem: AssistMem): AI {
   return {
     corr: rrange(rng, ...L.corr), early: rrange(rng, ...L.early), home,
-    dir: rng() < 0.5 ? 1 : -1, err: rrange(rng, -L.err, L.err), wpi: 0, legSeen: -1, lastTack: -1e9, back: false, mem, exit: null,
+    dir: rng() < 0.5 ? 1 : -1, err: rrange(rng, -L.err, L.err), wpi: 0, legSeen: -1, lastTack: -1e9, back: false, mem, exit: null, k: 0,
   };
 }
 
@@ -51,8 +53,9 @@ export function aiTarget(b: Boat, c: Course): { x: number; y: number } {
   }
   if (b.leg >= 1 && b.leg <= c.marks.length) {
     const m = c.marks[b.leg - 1];
+    // approche, puis point extérieur jusqu'à ce que le passage soit validé (le point de sortie vient après)
     let w = m.wp[A.wpi];
-    while (A.wpi < 2 && Math.hypot(w.x - b.x, w.y - b.y) < (m.island != null ? 300 : 45)) w = m.wp[++A.wpi];
+    while (A.wpi < 1 && Math.hypot(w.x - b.x, w.y - b.y) < (m.island != null ? 300 : 45)) w = m.wp[++A.wpi];
     return w;
   }
   // arrivée : si on est déjà passé sous la ligne sans la couper (hors bouées), on remonte d'abord
@@ -88,31 +91,41 @@ export function aiSteer(b: Boat, c: Course, t: number, wd: number): void {
     else if (b.leg === 0) h = wd + b.tack * up;
     else {
       const tg = aiTarget(b, c), brg = Math.atan2(tg.x - b.x, -(tg.y - b.y)), rel = norm(brg - wd);
-      const close = b.leg > c.marks.length && Math.hypot(tg.x - b.x, tg.y - b.y) < 700;
+      const dT = Math.hypot(tg.x - b.x, tg.y - b.y);
+      const close = (b.leg > c.marks.length && dT < 700) || dT < 250;
       if (A.lastTack > t) A.lastTack = t - 30;
       const canTack = t - A.lastTack > 25;
       const tack = b.tack;
+      // couloir : sur les longs bords, on ne s'écarte pas de plus de ~1,5 km de la route directe
+      const corr = Math.min(A.corr, Math.atan(1500 / Math.max(1, dT)) / D + 4) * D;
+      if (!A.k) A.k = tack;
+      const pickTack = (ang: number, relX: number): number => {
+        let k = A.k;
+        if (canTack && k * relX < -corr) k = -k;
+        // évitement des îles : on ne prend pas l'amure qui mène sur une île si l'autre est dégagée
+        const dK = islandAhead(b.x, b.y, wd + k * ang, 1500, 220), dO = islandAhead(b.x, b.y, wd - k * ang, 1500, 220);
+        if (dK < 1500 && dO > dK && (canTack || dK < 500 || k !== A.k)) k = -k;
+        if (k !== A.k) { A.lastTack = t; A.k = k; }
+        return k;
+      };
       if (Math.abs(rel) < up) {
-        // près : bord le plus favorable, on vire quand la cible passe de l'autre côté (ou sur l'obstacle)
-        let k = tack;
-        if (canTack && k * rel < -A.corr * D) k = -k;
-        h = wd + k * up;
-        { const d = islandAhead(b.x, b.y, h, 1200, 220); if ((canTack && d < 1200) || d < 500) k = -tack; }
-        h = wd + k * up;
-        if (k !== tack) A.lastTack = t;
+        h = wd + pickTack(up, rel) * up;
       } else if (Math.abs(rel) > down && !close) {
-        let k = tack;
-        const relD = norm(rel - Math.PI);
-        if (canTack && -k * relD < -A.corr * D) k = -k;
-        h = wd + k * down;
-        { const d = islandAhead(b.x, b.y, h, 1200, 220); if ((canTack && d < 1200) || d < 500) k = -tack; }
-        h = wd + k * down;
-        if (k !== tack) A.lastTack = t;
+        h = wd + pickTack(down, -norm(rel - Math.PI)) * down;
       } else {
         h = brg;
         const d = islandAhead(b.x, b.y, h, 900, 220);
         if (d < 900) { const l = islandAhead(b.x, b.y, h - 0.5, 900, 220), r = islandAhead(b.x, b.y, h + 0.5, 900, 220); h += r >= l ? 0.5 : -0.5; }
       }
+    }
+  }
+  // dernier recours : si le cap mène sur une île, on prend le cap navigable dégagé le plus proche
+  if (t >= 0 && islandAhead(b.x, b.y, h, 600, 150) < 600) {
+    for (let j = 1; j <= 14; j++) {
+      const c1 = h + j * 12 * D, c2 = h - j * 12 * D;
+      const ok = (c: number) => Math.abs(norm(c - wd)) >= up * 0.95 && islandAhead(b.x, b.y, c, 700, 150) === Infinity;
+      if (ok(c1)) { h = c1; break; }
+      if (ok(c2)) { h = c2; break; }
     }
   }
   b.pilot.on = true; b.pilot.mode = 'cap'; b.pilot.set = norm(h);
