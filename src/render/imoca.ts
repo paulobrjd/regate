@@ -16,8 +16,20 @@ const HK = (t: number) => t < 0.42 ? 0.5 - 1.05 * (1 - Math.pow(1 - t / 0.42, 2)
 const HC = (t: number) => 0.32 + 0.5 * Math.pow(1 - t, 3);
 const XC = (t: number) => HW(t) * (0.96 - 0.3 * Math.pow(1 - t, 5));
 /** Pont bombé, avec le cockpit en creux à l'arrière. */
-export const deckY = (t: number, w: number) => HT(t) + 0.13 * (1 - w * w) - 0.5 * sm(0.64, 0.52, Math.abs(w)) * sm(0.78, 0.81, t) * sm(0.99, 0.965, t);
+export const deckY = (t: number, w: number) => HT(t) + 0.13 * (1 - w * w) - 0.5 * sm(0.64, 0.52, Math.abs(w)) * sm(0.70, 0.73, t) * sm(0.99, 0.965, t);
 export const MAST_T = 0.43, MAST_Z = HZ(MAST_T), DECK = HT(MAST_T) + 0.13;
+/** Winchs : primaires (écoutes de voile d'avant) et secondaires, de chaque côté. */
+export const WINCHES = [{ x: 1.85, t: 0.84, r: 0.17 }, { x: 1.95, t: 0.93, r: 0.14 }];
+export const TRAV_T = 0.95;
+
+/** Petit écran de navigation (courbes et chiffres). */
+function screenTex(col: string): T.CanvasTexture {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 64; const x = c.getContext('2d')!;
+  x.fillStyle = '#05121c'; x.fillRect(0, 0, 128, 64);
+  x.strokeStyle = col; x.lineWidth = 2; x.beginPath(); for (let i = 0; i <= 64; i++) x.lineTo(4 + i * 1.9, 44 - Math.sin(i * 0.25) * 8 - Math.random() * 4); x.stroke();
+  x.fillStyle = col; x.font = 'bold 18px sans-serif'; x.fillText((10 + Math.random() * 15).toFixed(1), 6, 20);
+  return new T.CanvasTexture(c);
+}
 
 /** Point de la demi-section : s ∈ [0,1] de la quille au livet. */
 function sect(t: number, s: number): [number, number] {
@@ -122,7 +134,7 @@ export function mats(): Mats {
 }
 
 export interface ImocaParts {
-  roll: T.Group; mast: T.Mesh; boomG: T.Group; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[];
+  roll: T.Group; mast: T.Mesh; boomG: T.Group; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[]; car: T.Mesh; tiller: T.Group;
 }
 
 /** Construit la coque, le pont, l'accastillage, le mât et les appendices dans le groupe roll. */
@@ -171,7 +183,7 @@ export function buildImoca(roll: T.Group, col: string, name: string, num: string
       const f = i / NT, t = t0 + (t1 - t0) * f, a = HW(t) * (0.58 + 0.12 * f), h = 0.25 + 0.5 * Math.min(1, f * 3);
       for (let k = 0; k <= NP; k++) {
         const ph = Math.PI * k / NP, c = Math.cos(ph), s = Math.sin(ph);
-        p.push(a * Math.sign(c) * Math.pow(Math.abs(c), 0.35), deckY(t, 0.55) - 0.05 + h * Math.pow(s, 0.3), HZ(t));
+        p.push(a * Math.sign(c) * Math.pow(Math.abs(c), 0.35), deckY(t, 0.72) - 0.05 + h * Math.pow(s, 0.3), HZ(t));
       }
     }
     for (let i = 0; i < NT; i++) for (let k = 0; k < NP; k++) { const a = i * (NP + 1) + k, b = a + 1, c = a + NP + 1, d = c + 1; id.push(a, c, b, b, c, d); }
@@ -181,12 +193,46 @@ export function buildImoca(roll: T.Group, col: string, name: string, num: string
     win.position.set(0, deckY(0.62, 0.5) + 0.45, HZ(0.62)); win.rotation.x = -0.9; roll.add(win);
     for (const sx of [-1, 1]) { const sw = new T.Mesh(new T.BoxGeometry(0.04, 0.2, 1.6), M.glass); sw.position.set(sx * HW(0.7) * 0.66, deckY(0.7, 0.6) + 0.48, HZ(0.7)); roll.add(sw); }
   }
-  // --- winchs, colonne de moulin à café ---
-  for (const [x, t] of [[-1.55, 0.86], [1.55, 0.86], [-0.95, 0.845], [0.95, 0.845], [-1.9, 0.93], [1.9, 0.93]]) {
-    const w = new T.Mesh(new T.CylinderGeometry(0.15, 0.19, 0.28, 16), M.metal); w.position.set(x, deckY(t, x / HW(t)) + 0.14, HZ(t)); w.castShadow = true; roll.add(w);
+  // --- winchs (sur l'hiloire du cockpit), colonne de moulin à café ---
+  for (const wp of WINCHES) for (const sx of [-1, 1]) {
+    const x = sx * wp.x, t = wp.t, y = deckY(t, x / HW(t));
+    const w = new T.Mesh(new T.CylinderGeometry(wp.r, wp.r * 1.25, 0.3, 18), M.metal); w.position.set(x, y + 0.15, HZ(t)); w.castShadow = true; roll.add(w);
+    const top = new T.Mesh(new T.CylinderGeometry(wp.r * 0.75, wp.r * 0.9, 0.08, 14), M.carbon); top.position.set(x, y + 0.33, HZ(t)); roll.add(top);
   }
-  { const ped = new T.Mesh(new T.CylinderGeometry(0.08, 0.12, 0.85, 10), M.carbon); ped.position.set(0, deckY(0.9, 0) + 0.42, HZ(0.9)); roll.add(ped);
-    const hd = new T.Mesh(new T.BoxGeometry(0.7, 0.06, 0.06), M.metal); hd.position.set(0, deckY(0.9, 0) + 0.85, HZ(0.9)); roll.add(hd); }
+  const floor = (t: number) => deckY(t, 0);
+  { const ped = new T.Mesh(new T.CylinderGeometry(0.09, 0.14, 0.95, 12), M.carbon); ped.position.set(0, floor(0.8) + 0.47, HZ(0.8)); roll.add(ped);
+    const hd = new T.Mesh(new T.CylinderGeometry(0.11, 0.11, 0.12, 12), M.metal); hd.rotation.z = Math.PI / 2; hd.position.set(0, floor(0.8) + 0.95, HZ(0.8)); roll.add(hd);
+    for (const sx of [-1, 1]) { const h = new T.Mesh(new T.BoxGeometry(0.04, 0.3, 0.04), M.metal); h.position.set(sx * 0.12, floor(0.8) + 0.95, HZ(0.8) + 0.12); roll.add(h); } }
+  // --- intérieur : cloison avec descente, écrans, siège baquet, cale-pieds ---
+  {
+    const tb = 0.715, zb = HZ(tb), wB = HW(tb) * 0.6, yF = floor(0.74), hB = deckY(tb, 0.7) + 0.6 - yF;
+    const bulk = new T.Mesh(new T.BoxGeometry(wB * 2, hB, 0.05), new T.MeshStandardMaterial({ color: '#d6dbde', roughness: 0.6 }));
+    bulk.position.set(0, yF + hB / 2, zb); roll.add(bulk);
+    // descente vers la cabine : ouverture sombre et lueur de la table à cartes
+    const hole = new T.Mesh(new T.BoxGeometry(0.62, 0.95, 0.5), new T.MeshStandardMaterial({ color: '#0b1014', roughness: 1, side: T.BackSide }));
+    hole.position.set(0, yF + 0.5, zb - 0.24); roll.add(hole);
+    const glow = new T.Mesh(new T.PlaneGeometry(0.4, 0.22), new T.MeshBasicMaterial({ color: '#3fa7ff' })); glow.position.set(0, yF + 0.55, zb - 0.47); roll.add(glow);
+    // écrans de navigation au-dessus de la descente
+    const scr = (x: number, w: number, c: string) => { const m = new T.Mesh(new T.PlaneGeometry(w, 0.26), new T.MeshBasicMaterial({ map: screenTex(c) })); m.position.set(x, yF + hB - 0.32, zb + 0.03); roll.add(m); };
+    scr(-0.62, 0.42, '#38d27a'); scr(0, 0.5, '#3fa7ff'); scr(0.62, 0.42, '#ffb340');
+    // siège baquet face aux écrans
+    const seatM = new T.MeshStandardMaterial({ color: '#30383e', roughness: 0.8 });
+    const seat = new T.Mesh(new T.BoxGeometry(0.55, 0.12, 0.55), seatM); seat.position.set(0, yF + 0.45, HZ(0.765)); roll.add(seat);
+    const back = new T.Mesh(new T.BoxGeometry(0.55, 0.7, 0.1), seatM); back.position.set(0, yF + 0.82, HZ(0.765) + 0.3); back.rotation.x = 0.2; roll.add(back);
+    const leg = new T.Mesh(new T.CylinderGeometry(0.05, 0.08, 0.42, 8), M.carbon); leg.position.set(0, yF + 0.2, HZ(0.765)); roll.add(leg);
+    // cale-pieds et marche
+    for (const t of [0.86, 0.92]) { const fb = new T.Mesh(new T.BoxGeometry(HW(t) * 1.1, 0.06, 0.12), M.carbon); fb.position.set(0, floor(t) + 0.05, HZ(t)); roll.add(fb); }
+  }
+  // --- rail et chariot de grand-écoute ---
+  { const t = TRAV_T, track = new T.Mesh(new T.BoxGeometry(HW(t) * 1.5, 0.05, 0.1), M.metal); track.position.set(0, floor(t) + 0.32, HZ(t)); roll.add(track);
+    for (const sx of [-1, 1]) { const ft = new T.Mesh(new T.BoxGeometry(0.08, 0.32, 0.12), M.carbon); ft.position.set(sx * HW(t) * 0.75, floor(t) + 0.16, HZ(t)); roll.add(ft); } }
+  const car = new T.Mesh(new T.BoxGeometry(0.22, 0.1, 0.16), M.dark); car.position.set(0, floor(TRAV_T) + 0.38, HZ(TRAV_T)); roll.add(car);
+  // --- barres franches jumelles reliées par une traverse ---
+  const tiller = new T.Group(); tiller.position.set(0, HT(0.97) + 0.3, HZ(0.965)); roll.add(tiller);
+  { const tm = new T.MeshStandardMaterial({ color: '#b5895a', roughness: 0.5 });
+    for (const sx of [-1, 1]) { const g = new T.CylinderGeometry(0.03, 0.04, 1.5, 8); g.rotateX(Math.PI / 2); const m = new T.Mesh(g, M.carbon); m.position.set(sx * HW(0.97) * 0.72, 0, -0.75); tiller.add(m); }
+    const cb = new T.CylinderGeometry(0.025, 0.025, HW(0.97) * 1.44, 8); cb.rotateZ(Math.PI / 2); const cross = new T.Mesh(cb, tm); cross.position.set(0, 0, -1.45); tiller.add(cross); }
+
   // --- bout-dehors ---
   { const bs = new T.Mesh(new T.CylinderGeometry(0.06, 0.09, 2.6, 10), M.carbon); bs.rotation.x = Math.PI / 2 - 0.05; bs.position.set(0, HT(0) + 0.05, HZ(0) - 1.1); roll.add(bs); }
 
@@ -242,7 +288,7 @@ export function buildImoca(roll: T.Group, col: string, name: string, num: string
     const g = new T.Group(); g.position.set(sx * HW(0.97) * 0.72, HT(0.97) - 0.3, HZ(0.965)); g.rotation.z = -sx * 0.12;
     const bl = blade(0.5, 0.11, 2.8, M.carbon); bl.position.y = 0.4; g.add(bl); roll.add(g); return g;
   });
-  return { roll, mast, boomG, keelG, foilP, foilS, ruds };
+  return { roll, mast, boomG, keelG, foilP, foilS, ruds, car, tiller };
 }
 
 /** Texture de grand-voile : membrane 3Di anthracite, lattes, bandes de ris, numéro. */

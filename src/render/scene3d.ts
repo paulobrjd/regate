@@ -11,7 +11,7 @@ import { headAngle, mainAngle } from '../physics/model';
 T.ColorManagement.enabled = false;
 const f = (v: number) => v.toFixed(5);
 
-import { HZ, HW, deckY, MAST_Z, DECK, buildImoca, mainTex, headTex, mats } from './imoca';
+import { HZ, HW, deckY, MAST_Z, DECK, WINCHES, TRAV_T, buildImoca, mainTex, headTex, mats } from './imoca';
 
 const NU = 12, NV = 22;
 
@@ -19,6 +19,9 @@ interface Rec {
   yaw: T.Group; roll: T.Group; boomG: T.Group; mast: T.Mesh; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[];
   mg: T.BufferGeometry; hg: T.BufferGeometry; hmesh: T.Mesh<T.BufferGeometry, T.MeshStandardMaterial>;
   sailor: T.Group; armL: T.Mesh; armR: T.Mesh; head: T.Mesh;
+  car: T.Mesh; tiller: T.Group; ropes: T.LineSegments; ropePos: Float32Array; ropeCol: Float32Array; clew: T.Vector3;
+  /** Skipper : position sur le pont (x, t), activité et minuterie. */
+  sk: { x: number; t: number; mode: 'helm' | 'grind' | 'pedestal'; timer: number; tack: number };
   lb: T.Sprite; name: string; heel: number; used: boolean; sideS?: number; prevS?: number; headId: string;
 }
 interface Drop { x: number; y: number; z: number; vx: number; vy: number; vz: number; a: number }
@@ -304,7 +307,12 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     sailor.traverse(o => { (o as T.Mesh).castShadow = true; });
     const lb = this.label(b.name, 'rgba(4,30,50,.6)'); lb.position.y = 33; yaw.add(lb);
     this.scene.add(yaw);
-    return { yaw, roll, boomG: parts.boomG, mast: parts.mast, keelG: parts.keelG, foilP: parts.foilP, foilS: parts.foilS, ruds: parts.ruds, mg, hg, hmesh, sailor, armL, armR, head, lb, name: b.name, heel: 0, used: true, headId: '' };
+    // cordages : écoutes, grand-écoute, tours sur les winchs (mis à jour à chaque image)
+    const RN = 400, ropePos = new Float32Array(RN * 6), ropeCol = new Float32Array(RN * 6);
+    const rg = new T.BufferGeometry(); rg.setAttribute('position', new T.BufferAttribute(ropePos, 3)); rg.setAttribute('color', new T.BufferAttribute(ropeCol, 3));
+    const ropes = new T.LineSegments(rg, new T.LineBasicMaterial({ vertexColors: true })); ropes.frustumCulled = false; roll.add(ropes);
+    return { yaw, roll, boomG: parts.boomG, mast: parts.mast, keelG: parts.keelG, foilP: parts.foilP, foilS: parts.foilS, ruds: parts.ruds, mg, hg, hmesh, sailor, armL, armR, head, lb, name: b.name, heel: 0, used: true, headId: '',
+      car: parts.car, tiller: parts.tiller, ropes, ropePos, ropeCol, clew: new T.Vector3(), sk: { x: -1.6, t: 0.955, mode: 'helm', timer: 0, tack: 0 } };
   }
 
   /** Grand-voile : guindant le long du mât, bordure sur la bôme, rond de chute et tête carrée. */
@@ -346,6 +354,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       }
     }
     r.hg.attributes.position.needsUpdate = true; r.hg.computeVertexNormals(); r.hg.computeBoundingSphere();
+    r.clew.copy(C);
     if (r.headId !== id) { r.hmesh.material.map = this.headMap(id, b.col); r.hmesh.material.needsUpdate = true; r.headId = id; }
   }
 
@@ -406,14 +415,12 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     r.foilP.position.x = -1.2 + (1 - b.foilP) * 2.4;
     r.foilS.position.x = 1.2 - (1 - b.foilS) * 2.4;
     for (const rd of r.ruds) rd.rotation.y = b.rud * 0.8;
-    // skipper : à la barre/au pilote dans le cockpit, aux winchs pendant une manœuvre
-    const busy = !!b.task || Math.abs(b.mainSheet - b.ideal.mainSheet) > 0.08;
+    // chariot de grand-écoute et barres franches
+    r.car.position.x = clamp(b.trav, -1, 1) * ss * HW(TRAV_T) * 0.6;
+    r.tiller.rotation.y = b.rud * 0.8;
+    this.animSkipper(r, b, dt, tack);
     r.sailor.visible = b.knock <= 0 && !(isMe && pov);
-    const st = busy ? 0.87 : 0.92, sx = -tack * (busy ? 0.35 : 1.05);
-    r.sailor.position.set(sx, deckY(st, sx / HW(st)), HZ(st));
-    r.sailor.rotation.y = busy ? tack * 0.6 : 0;
-    const ph = tm * 7;
-    r.armL.rotation.x = busy ? 0.9 + Math.sin(ph) * 0.8 : 0.5; r.armR.rotation.x = busy ? 0.9 + Math.sin(ph + Math.PI) * 0.8 : 0.5;
+    this.updateRopes(r, b, ss, tm);
     r.head.visible = !(isMe && pov);
     r.lb.visible = !isMe; r.used = true;
     if (isMe && r.hmesh.visible) this.setTells(r, b, ss, tm);
@@ -426,6 +433,84 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
         drops.push({ x: bx + fz * sd * 1.2, y: y + 0.4, z: bz - fx * sd * 1.2, vx: fx * b.v * 0.3 + fz * sd * (2 + Math.random() * 4), vy: 2 + Math.random() * (2 + b.v * 0.35), vz: fz * b.v * 0.3 - fx * sd * (2 + Math.random() * 4), a: 0 });
       }
     }
+  }
+
+  /** Skipper : à la barre côté au vent ; au virement il traverse et mouline sur le winch sous le vent ; pendant une manœuvre, à la colonne. */
+  private animSkipper(r: Rec, b: Boat, dt: number, tack: number): void {
+    const k = r.sk;
+    if (!k.tack) k.tack = tack;
+    if (tack !== k.tack) { k.tack = tack; k.mode = 'grind'; k.timer = 3.5; }
+    if (b.task) k.mode = 'pedestal';
+    else if (k.mode === 'pedestal') k.mode = 'helm';
+    if (k.mode === 'grind') { k.timer -= dt; if (k.timer <= 0) k.mode = 'helm'; }
+    const tx = k.mode === 'helm' ? -tack * 1.55 : k.mode === 'grind' ? tack * 1.4 : 0;
+    const tt = k.mode === 'helm' ? 0.952 : k.mode === 'grind' ? 0.84 : 0.83;
+    const sp = 2.4 * dt, dx = tx - k.x, dz = (tt - k.t) * 18.28, d = Math.hypot(dx, dz);
+    const walking = d > 0.06;
+    if (walking) { const f = Math.min(1, sp / d); k.x += dx * f; k.t += (tt - k.t) * f; }
+    const ph = this.rt * 9;
+    r.sailor.position.set(k.x, deckY(k.t, k.x / HW(k.t)) + (walking ? Math.abs(Math.sin(ph)) * 0.05 : 0), HZ(k.t));
+    // il reste vertical malgré la gîte ; il regarde vers l'avant, ou vers son winch
+    r.sailor.rotation.set(0, walking ? Math.atan2(-dx, -dz) : k.mode === 'grind' ? -tack * Math.PI / 2 : k.mode === 'helm' ? tack * 0.35 : 0, tack * r.heel * 0.75, 'YXZ');
+    if (walking) { r.armL.rotation.x = 0.3 + Math.sin(ph) * 0.5; r.armR.rotation.x = 0.3 - Math.sin(ph) * 0.5; }
+    else if (k.mode === 'helm') {
+      // une main sur la barre (côté bordé), l'autre sur l'écoute
+      const tillerArm = tack > 0 ? r.armL : r.armR, other = tack > 0 ? r.armR : r.armL;
+      tillerArm.rotation.x = 1.25 + b.rud * 0.6; other.rotation.x = 0.6 + Math.sin(this.rt * 0.7) * 0.1;
+    } else { r.armL.rotation.x = 1.1 + Math.sin(ph * 0.8) * 0.75; r.armR.rotation.x = 1.1 + Math.sin(ph * 0.8 + Math.PI) * 0.75; }
+  }
+
+  /** Écoutes de voile d'avant (bordée sous le vent, molle au vent), grand-écoute, tours sur les winchs. */
+  private updateRopes(r: Rec, b: Boat, ss: number, tm: number): void {
+    const P = r.ropePos, Cc = r.ropeCol; let n = 0;
+    const max = P.length / 6;
+    const seg = (a: number[], c: number[], col: number[]) => { if (n >= max) return; P.set(a, n * 6); P.set(c, n * 6 + 3); Cc.set(col, n * 6); Cc.set(col, n * 6 + 3); n++; };
+    const line = (a: number[], c: number[], sag: number, col: number[], k = 10, floorY?: number) => {
+      let prev = a;
+      for (let i = 1; i <= k; i++) {
+        const u = i / k; let y = a[1] + (c[1] - a[1]) * u - sag * 4 * u * (1 - u);
+        const x = a[0] + (c[0] - a[0]) * u, z = a[2] + (c[2] - a[2]) * u;
+        if (floorY !== undefined) y = Math.max(y, floorY);
+        const p = [x, y, z]; seg(prev, p, col); prev = p;
+      }
+    };
+    const wrap = (x: number, y: number, z: number, rad: number, turns: number, col: number[]) => {
+      let prev = [x + rad, y, z];
+      for (let i = 1; i <= turns * 14; i++) { const a = i / 14 * Math.PI * 2, p = [x + Math.cos(a) * rad, y + i / (turns * 14) * 0.18, z + Math.sin(a) * rad]; seg(prev, p, col); prev = p; }
+      return prev;
+    };
+    const ORANGE = [1, 0.45, 0.15], BLUE = [0.25, 0.55, 1], WHITE = [0.92, 0.92, 0.88];
+    const lee = ss >= 0 ? 1 : -1, wp = WINCHES[0];
+    const winch = (sx: number) => { const t = wp.t, x = sx * wp.x; return [x, deckY(t, x / HW(t)) + 0.08, HZ(t)]; };
+    // voile d'avant
+    if (b.headPow > 0.05) {
+      const id = b.cls.heads[b.head].id, big = id === 'C0' || id === 'A3', lt = big ? 0.72 : 0.5;
+      const lead = (sx: number) => [sx * HW(lt) * (big ? 0.96 : 0.8), deckY(lt, big ? 0.96 : 0.8) + 0.08, HZ(lt)];
+      const clew = [r.clew.x, r.clew.y, r.clew.z];
+      // écoute bordée, sous le vent
+      const Ll = lead(lee), Wl = winch(lee);
+      line(clew, Ll, 0.05, ORANGE, 6); line(Ll, [Wl[0] - lee * wp.r, Wl[1] + 0.2, Wl[2]], 0.02, ORANGE, 3);
+      const end = wrap(Wl[0], Wl[1], Wl[2], wp.r + 0.01, 3, ORANGE);
+      line(end, [lee * 1.0, deckY(0.85, 0.4) + 0.02, HZ(0.86)], 0.25, ORANGE, 5); // mou dans le cockpit
+      // écoute molle, au vent
+      const Lw = lead(-lee), Ww = winch(-lee);
+      line(clew, Lw, 1.2, BLUE, 10, deckY(0.3, 0) - 0.4); line(Lw, [Ww[0] + lee * wp.r, Ww[1] + 0.2, Ww[2]], 0.15, BLUE, 4);
+      wrap(Ww[0], Ww[1], Ww[2], wp.r + 0.01, 1, BLUE);
+    }
+    // grand-écoute : bout de bôme → chariot (palan) → winch de colonne
+    {
+      const ba = r.boomG.rotation.y, bp = r.boomG.position;
+      const be = [bp.x + Math.sin(ba) * 6.6, bp.y - 0.25, bp.z + Math.cos(ba) * 6.6];
+      const car = r.car.position, cp = [car.x, car.y + 0.05, car.z];
+      for (const o of [-0.06, 0, 0.06]) seg([be[0] + o, be[1], be[2]], [cp[0] + o, cp[1], cp[2]], WHITE);
+      line(cp, [0, deckY(0.8, 0) + 0.95, HZ(0.8)], 0.3, WHITE, 6);
+    }
+    // drisses et bosses de ris le long du mât (légère vibration)
+    const fl = Math.sin(tm * 3) * 0.01;
+    seg([0.12, DECK + 1.2, MAST_Z + 0.3], [0.12 + fl, DECK + 26, MAST_Z + 0.3], WHITE);
+    for (let i = n; i < max; i++) { P.fill(0, i * 6, i * 6 + 6); }
+    r.ropes.geometry.setDrawRange(0, n * 2);
+    r.ropes.geometry.attributes.position.needsUpdate = true; r.ropes.geometry.attributes.color.needsUpdate = true;
   }
 
   resize(w: number, h: number): void {
@@ -471,7 +556,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     if (pov && mr) {
       // vue cockpit : à la barre, derrière la casquette
       mr.yaw.updateMatrixWorld(true);
-      this.hw.set(-(me.twa >= 0 ? 1 : -1) * 1.9, deckY(0.93, 0.7) + 1.75, HZ(0.93)); mr.roll.localToWorld(this.hw);
+      this.hw.set(-(me.twa >= 0 ? 1 : -1) * 1.5, deckY(0.96, 0.6) + 1.7, HZ(0.96)); mr.roll.localToWorld(this.hw); // debout à la barre, côté au vent
       cam.position.copy(this.hw);
       const tack = me.twa >= 0 ? 1 : -1;
       this.eul.set(-0.06 + mr.roll.rotation.x * 0.6 + look.pitch, -me.h + look.yaw, -tack * mr.heel * 0.55, 'YXZ'); cam.quaternion.setFromEuler(this.eul);
