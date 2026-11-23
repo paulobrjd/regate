@@ -29,6 +29,8 @@ export interface Boat {
   ballP: number; ballS: number; ballPT: number; ballST: number;
   energy: number;
   pilot: Pilot;
+  /** Bateau d'un autre joueur (en ligne) : position reçue du réseau, pas simulé ici. */
+  remote?: boolean;
   /** Mode indulgent : pas de départ au lof, de chavirage ni d'empannage sauvage. */
   safe: boolean;
   /** Facteur de performance (IA : habileté de l'équipage virtuel). */

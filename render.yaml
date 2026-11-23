@@ -1,0 +1,14 @@
+# Configuration Render (hébergement gratuit) : un seul service sert le jeu et le serveur multijoueur.
+services:
+  - type: web
+    name: regate-au-large
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /sante
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"

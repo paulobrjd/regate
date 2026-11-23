@@ -49,7 +49,16 @@ export interface GameOpts {
   startT?: number;
   /** Rythme de base (1 = temps réel, 2 = dynamique). */
   pace?: number;
+  /** En ligne : place sur la ligne, chrono de course donné par le serveur, heure du serveur (ms). */
+  slot?: { i: number; n: number };
+  clock?: () => number;
+  remoteClock?: () => number;
 }
+
+/** État d'un bateau échangé en ligne (tableau compact). */
+const SNAP = ['x', 'y', 'h', 'v', 'heel', 'mainSheet', 'trav', 'headSheet', 'head', 'reefs', 'keel', 'foilP', 'foilS', 'awa', 'tws', 'rud', 'headPow', 'mainPow', 'knock', 'leg', 'ocs', 'twa', 'aws', 'foilLift'] as const;
+const ANG = new Set(['h', 'awa', 'twa']);
+interface Remote { b: Boat; buf: { t: number; s: number[] }[]; seen: number }
 
 export interface Standing { name: string; col: string; me: boolean; leg: number; fin: number | null; ocs: boolean; d: number }
 
@@ -94,6 +103,10 @@ export class Game {
   private ghost: AI | null = null;
   private adviceT = 0;
   private ghostTack = 0;
+  private clock?: () => number;
+  private remoteClock?: () => number;
+  /** Bateaux des autres joueurs (en ligne), par identifiant. */
+  readonly remotes = new Map<string, Remote>();
   private obstacles: Obstacle[];
 
   constructor(o: GameOpts) {
@@ -137,6 +150,11 @@ export class Game {
     [b0.x, bj.x] = [bj.x, b0.x];
     if (b0.ai) b0.ai.home = b0.x;
     if (bj.ai) bj.ai.home = bj.x;
+    if (o.slot) { // en ligne : chacun sa place sur la ligne
+      const { i, n } = o.slot, dir = i % 2 ? 1 : -1;
+      b0.x = -320 + (i + 0.5) * (640 / Math.max(1, n)); b0.y = 300 + (i % 3) * 45; b0.h = this.wd + dir * 95 * D; b0.tack = b0.lastTack = dir;
+    }
+    this.clock = o.clock; this.remoteClock = o.remoteClock;
     // configuration initiale raisonnable (puis l'assistance ou le joueur prend la main)
     for (const b of this.boats) {
       b.ix = b.px = b.x; b.iy = b.py = b.y;
@@ -214,7 +232,7 @@ export class Game {
   /** Avance la simulation d'un pas fixe. */
   update(dt: number, input: BoatInput): void {
     this.simT += dt;
-    this.t += dt;
+    this.t = this.clock ? this.clock() : this.t + dt;
     const t = this.t;
     this.wd = this.wind.dir(t);
     this.env.wd = this.wd;
@@ -224,7 +242,9 @@ export class Game {
       if (!this.demo) { this.onSfx('gun'); this.say(this.me.ocs ? 'Départ anticipé ! Repasse sous la ligne' : 'Partez !'); }
     }
     this.lastT = t;
+    const rnow = this.remoteClock ? this.remoteClock() - 200 : 0; // on affiche les autres avec 200 ms de retard (interpolation)
     for (const b of this.boats) {
+      if (b.remote) { this.updateRemote(b, rnow, dt); continue; }
       let inp = NO_INPUT;
       if (b.ai) {
         aiSteer(b, this.course, t, this.wd);
@@ -358,8 +378,9 @@ export class Game {
     for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
       const a = L[i], b = L[j], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
       if (d < R && d > 0 && a.fin == null && b.fin == null) {
-        const p = (R - d) / 2;
-        a.x -= dx / d * p; a.y -= dy / d * p; b.x += dx / d * p; b.y += dy / d * p;
+        // un bateau distant ne bouge pas ici (sa position vient du réseau) : l'autre recule de tout l'écart
+        const pa = b.remote ? R - d : a.remote ? 0 : (R - d) / 2, pb = a.remote ? R - d : b.remote ? 0 : (R - d) / 2;
+        a.x -= dx / d * pa; a.y -= dy / d * pa; b.x += dx / d * pb; b.y += dy / d * pb;
         // choc : on ne freine que si les bateaux se rapprochent
         const rv = (Math.sin(b.h) * b.v - Math.sin(a.h) * a.v) * dx + (-Math.cos(b.h) * b.v + Math.cos(a.h) * a.v) * dy;
         if (rv < -0.5 * d) {
@@ -367,6 +388,62 @@ export class Game {
           if ((a === this.me || b === this.me) && this.msgT < 1) this.say('Collision !');
         }
       }
+    }
+  }
+
+  // ---------- en ligne ----------
+  /** État compact de mon bateau, à envoyer au serveur. */
+  snapshotMe(): number[] {
+    const b = this.me as unknown as Record<string, number | boolean>;
+    return SNAP.map(k => { const v = b[k]; return typeof v === 'boolean' ? (v ? 1 : 0) : k === 'knock' ? ((v as number) > 0 ? 1 : 0) : Math.round((v as number) * 1000) / 1000; });
+  }
+  addRemote(id: string, name: string, col: string): void {
+    if (this.remotes.has(id)) return;
+    const b = mkBoat(this.cls, { id: 100 + this.remotes.size, name, col, x: 0, y: 400, v: 0 });
+    b.remote = true; b.pilot.on = false;
+    this.boats.push(b);
+    this.remotes.set(id, { b, buf: [], seen: Date.now() });
+  }
+  removeRemote(id: string): void {
+    const r = this.remotes.get(id); if (!r) return;
+    this.boats.splice(this.boats.indexOf(r.b), 1); this.remotes.delete(id);
+  }
+  /** Positions reçues du serveur (t : heure du serveur). */
+  pushStates(t: number, boats: { id: string; s: number[]; fin: number | null }[], myId: string): void {
+    for (const st of boats) {
+      if (st.id === myId) continue;
+      const r = this.remotes.get(st.id); if (!r) continue;
+      r.buf.push({ t, s: st.s }); if (r.buf.length > 30) r.buf.shift();
+      r.seen = Date.now();
+      if (st.fin != null) r.b.fin = st.fin;
+    }
+  }
+  setRemoteFin(id: string, fin: number | null): void { const r = this.remotes.get(id); if (r && fin != null) r.b.fin = fin; }
+
+  /** Interpolation d'un bateau distant entre deux positions reçues. */
+  private updateRemote(b: Boat, rnow: number, dt: number): void {
+    const r = [...this.remotes.values()].find(x => x.b === b); if (!r || !r.buf.length) return;
+    let A = r.buf[0], B = r.buf[r.buf.length - 1];
+    for (let i = 0; i + 1 < r.buf.length; i++) if (r.buf[i].t <= rnow && r.buf[i + 1].t >= rnow) { A = r.buf[i]; B = r.buf[i + 1]; break; }
+    const f = B.t > A.t ? clamp((rnow - A.t) / (B.t - A.t), 0, 1.5) : 1;
+    b.ix = b.x; b.iy = b.y; b.ih = b.h; b.px = b.x; b.py = b.y;
+    const o = b as unknown as Record<string, number | boolean>;
+    SNAP.forEach((k, i) => {
+      const a = A.s[i] ?? 0, c = B.s[i] ?? a;
+      let v = ANG.has(k) ? a + norm(c - a) * f : a + (c - a) * f;
+      if (k === 'head' || k === 'reefs' || k === 'leg') v = Math.round(f < 0.5 ? a : c);
+      if (k === 'ocs') o[k] = (f < 0.5 ? a : c) > 0.5;
+      else if (k === 'knock') o[k] = (f < 0.5 ? a : c) > 0.5 ? 1 : 0;
+      else o[k] = v;
+    });
+    b.tack = b.twa >= 0 ? 1 : -1;
+    b.ideal = { mainSheet: b.mainSheet, trav: b.trav, headSheet: b.headSheet };
+    b.wt += dt;
+    for (const w of b.wake) w.t += dt;
+    while (b.wake.length && b.wake[0].t > 6) b.wake.shift();
+    if (b.wt > 0.1 && b.v > 0.8) {
+      b.wt = 0; const fx = Math.sin(b.h), fy = -Math.cos(b.h), sx = -fy * 2.2, sy = fx * 2.2;
+      b.wake.push({ x: b.x - fx * 9 + sx, y: b.y - fy * 9 + sy, t: 0 }, { x: b.x - fx * 9 - sx, y: b.y - fy * 9 - sy, t: 0 });
     }
   }
 

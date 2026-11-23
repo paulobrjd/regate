@@ -10,6 +10,8 @@ import { snapshot } from './render/snapshot';
 import { $, updateHud } from './ui/hud';
 import { unlockAudio, sfx, boom, updSound } from './audio/sound';
 import { app, type View } from './app';
+import { initLobby, net, assistChoice } from './ui/lobby';
+import type { StartMsg, ResultRow } from './net/client';
 import type { BoatInput } from './physics/boat';
 import { LEVELS, mkAI } from './ai/bot';
 import { newMem } from './game/assist';
@@ -71,7 +73,7 @@ function startSolo(): void {
 function menu(): void {
   $('ovEnd').hidden = true; $('ovStart').hidden = false;
   const g = app.g;
-  if (g && !g.demo && g.me.fin == null) { paused = true; $('resumeBtn').hidden = false; }
+  if (g && !g.demo && g.me.fin == null) { paused = g.mode !== 'net'; $('resumeBtn').hidden = false; } // en ligne, la course continue
   else { demo(); $('resumeBtn').hidden = true; }
   descCourse();
 }
@@ -79,9 +81,11 @@ function resume(): void { paused = false; $('ovStart').hidden = true; $('resumeB
 
 function finishMe(): void {
   const g = app.g;
+  if (g && g.mode === 'net') net.send({ type: 'finish' }); // le chrono officiel est celui du serveur
   setTimeout(() => { if (!app.g || app.g !== g || g.demo || g.me.fin == null) return; showEnd(g); }, 1500);
 }
 function showEnd(g: Game): void {
+  if (g.mode === 'net') { showNetEnd(g); return; }
   const t = g.me.fin!, st = g.standings(), pos = st.findIndex(e => e.me) + 1, id = g.venue.id + ':' + g.course.id;
   $('endTitle').textContent = pos === 1 && st.length > 1 ? 'Victoire !' : 'Arrivée !';
   $('endTime').textContent = fmt(t);
@@ -92,8 +96,54 @@ function showEnd(g: Game): void {
   $('endBest').textContent = line;
   g.endShown = true; renderRank(); $('ovEnd').hidden = false; $('againBtn').focus();
 }
+// ---------- en ligne ----------
+let lastResults: ResultRow[] = [];
+function startNet(m: StartMsg): void {
+  unlockAudio();
+  const players = m.players, i = Math.max(0, players.findIndex(p => p.id === net.id)), meP = players[i], st = m.settings;
+  const clock = () => (net.serverNow() - m.gunAt) * st.pace / 1000;
+  const g = new Game({ mode: 'net', seed: m.seed, venue: st.venue, course: st.course, met: st.met, sky: st.sky, pace: st.pace, bots: 0,
+    name: meP?.name, col: meP?.col, assist: assistChoice(), slot: { i, n: players.length }, clock, remoteClock: () => net.serverNow(), startT: clock() });
+  for (const p of players) if (p.id !== net.id) g.addRemote(p.id, p.name, p.col);
+  lastResults = [];
+  start(g);
+  $('ovStart').hidden = true; $('ovEnd').hidden = true; $('resumeBtn').hidden = true;
+  g.say('Course en ligne : ' + players.length + ' bateau' + (players.length > 1 ? 'x' : '') + ' · départ dans ' + Math.round(-g.t) + ' s');
+}
+function showNetEnd(g: Game): void {
+  const mine = lastResults.find(r => r.id === net.id), t = mine?.fin ?? g.me.fin;
+  const pos = lastResults.findIndex(r => r.id === net.id) + 1;
+  $('endTitle').textContent = pos === 1 && lastResults.length > 1 ? 'Victoire !' : 'Arrivée !';
+  $('endTime').textContent = t != null ? fmt(t) : '—';
+  $('endBest').textContent = (pos ? ord(pos) + ' sur ' + lastResults.length + ' · ' : '') + g.course.name + ' · chrono officiel du serveur';
+  $('againBtn').textContent = 'Retour au salon';
+  g.endShown = true; renderRank(); $('ovEnd').hidden = false;
+}
+function renderNetRank(): void {
+  const ol = $('endRank');
+  ol.innerHTML = lastResults.map(e => `<li class="${e.id === net.id ? 'me' : ''}"><span></span><span class="dot"></span><span></span><span></span></li>`).join('');
+  [...ol.children].forEach((li, i) => {
+    const e = lastResults[i], c = li.children as HTMLCollectionOf<HTMLElement>;
+    c[0].textContent = ord(i + 1); c[1].style.background = e.col;
+    c[2].textContent = e.name + (e.id === net.id ? ' (toi)' : '');
+    c[3].textContent = e.fin != null ? fmt(e.fin) : e.ocs ? 'départ anticipé' : 'en course';
+  });
+}
+net.onStates = (t, boats) => { const g = app.g; if (g && g.mode === 'net') g.pushStates(t, boats, net.id); };
+net.onResults = (list, final) => {
+  lastResults = list;
+  const g = app.g; if (!g || g.mode !== 'net') return;
+  for (const r of list) g.setRemoteFin(r.id, r.fin);
+  if (final && !g.endShown) showNetEnd(g);
+  else if (g.endShown) renderNetRank();
+};
+const lobby = initLobby({ onStart: startNet, isRacing: () => !!app.g && app.g.mode === 'net' && app.g.me.fin == null });
+{ const prev = net.onRoom; net.onRoom = r => { prev(r); const g = app.g; if (g && g.mode === 'net' && r) for (const id of [...g.remotes.keys()]) if (!r.players.some(p => p.id === id)) g.removeRemote(id); }; }
+let netSendT = 0;
+
 function renderRank(): void {
   const g = app.g; if (!g) return;
+  if (g.mode === 'net' && lastResults.length) { renderNetRank(); return; }
   const st = g.standings(), ol = $('endRank');
   ol.innerHTML = st.map(e => `<li class="${e.me ? 'me' : ''}"><span></span><span class="dot"></span><span></span><span></span></li>`).join('');
   [...ol.children].forEach((li, i) => {
@@ -152,12 +202,16 @@ c2d.cv.addEventListener('wheel', e => { if (app.view === 'top') { e.preventDefau
 function tab(isNet: boolean): void {
   $('tSolo').classList.toggle('on', !isNet); $('tNet').classList.toggle('on', isNet);
   $('pSolo').hidden = isNet; $('pNet').hidden = !isNet;
+  if (isNet) lobby.openTab();
 }
+if (new URLSearchParams(location.search).get('salon')) tab(true); // lien d'invitation
 $('tSolo').addEventListener('click', () => tab(false));
 $('tNet').addEventListener('click', () => tab(true));
 $('goBtn').addEventListener('click', startSolo);
 $('resumeBtn').addEventListener('click', resume);
-$('againBtn').addEventListener('click', startSolo);
+$('againBtn').addEventListener('click', () => {
+  if (app.g && app.g.mode === 'net') { $('againBtn').textContent = 'Nouvelle régate'; menu(); tab(true); } else startSolo();
+});
 $('menuBtn').addEventListener('click', menu);
 
 // ---------- entrées ----------
@@ -284,6 +338,11 @@ function loop(now: number): void {
     }
     if (g.over) demo();
     else draw(g, dt, paused ? 1 : acc / STEP);
+  }
+  // en ligne : ma position part au serveur 10 fois par seconde
+  if (g && g.mode === 'net' && net.connected) {
+    netSendT -= dt;
+    if (netSendT <= 0) { netSendT = 0.1; net.send({ type: 'state', s: g.snapshotMe(), leg: g.me.leg, d: Math.round(g.remaining(g.me)), ocs: g.me.ocs }); }
   }
   updSound(app.g, app.g ? app.g.simT : 0);
   hudT -= dt; if (hudT <= 0) { updateHud(app.g, renderRank); hudT = 0.1; $('timeBtn').firstChild!.textContent = 'Temps ×' + (app.g?.timeScale ?? 1); }
