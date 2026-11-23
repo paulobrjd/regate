@@ -213,6 +213,7 @@ export class Game {
         b.safe = !!this.assist.safe;
         applyAssist(b, this.assist, this.cal, this.meMem, this.simT, dt);
         if (this.assist.sails) b.energy = 1; // manœuvres automatiques : le skipper ne s'épuise pas
+        if (this.assist.helm && b.task) b.task.t += dt * 4; // Débutant : manœuvres express
       } else b.pilot = { on: true, mode: 'cap', set: this.wd + Math.PI / 2 };
       stepBoat(b, dt, inp, this.env);
       this.progress(b);

@@ -11,18 +11,13 @@ import { headAngle, mainAngle } from '../physics/model';
 T.ColorManagement.enabled = false;
 const f = (v: number) => v.toFixed(5);
 
-// --- carène d'IMOCA : t ∈ [0,1] de l'étrave au tableau arrière ---
-const L = 18.28;
-const HZ = (t: number) => -L / 2 + t * L;
-const HW = (t: number) => t < 0.55 ? 0.95 + 1.85 * Math.pow(Math.sin(t / 0.55 * Math.PI / 2), 0.7) : 2.8 - (t - 0.55) / 0.45 * 0.3; // étrave ronde (scow)
-const HT = (t: number) => 1.05 + 0.45 * Math.pow(1 - t, 2); // livet
-const HB = (t: number) => -0.55 * Math.min(1, t * 2.2) + 0.35 * Math.pow(Math.max(0, 0.25 - t) / 0.25, 1.5); // fond (relevé à l'étrave)
-const MAST_T = 0.42, MAST_Z = HZ(MAST_T), DECK = HT(MAST_T);
-const NU = 10, NV = 14;
+import { HZ, HW, deckY, MAST_Z, DECK, buildImoca, mainTex, headTex, mats } from './imoca';
+
+const NU = 12, NV = 22;
 
 interface Rec {
-  yaw: T.Group; roll: T.Group; boomG: T.Group; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[];
-  mg: T.BufferGeometry; hg: T.BufferGeometry; hmesh: T.Mesh<T.BufferGeometry, T.MeshLambertMaterial>;
+  yaw: T.Group; roll: T.Group; boomG: T.Group; mast: T.Mesh; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[];
+  mg: T.BufferGeometry; hg: T.BufferGeometry; hmesh: T.Mesh<T.BufferGeometry, T.MeshStandardMaterial>;
   sailor: T.Group; armL: T.Mesh; armR: T.Mesh; head: T.Mesh;
   lb: T.Sprite; name: string; heel: number; used: boolean; sideS?: number; prevS?: number; headId: string;
 }
@@ -42,10 +37,6 @@ export class Scene3D {
   private ring: T.Mesh<T.RingGeometry, T.MeshBasicMaterial>;
   private line: T.Line<T.BufferGeometry, T.LineDashedMaterial>;
   private boats3 = new Map<number, Rec>();
-  private darkM = new T.MeshLambertMaterial({ color: '#25343d' });
-  private carbon = new T.MeshLambertMaterial({ color: '#1b2328' });
-  private deckM = new T.MeshLambertMaterial({ color: '#d8dee2', side: T.DoubleSide });
-  private skin = new T.MeshLambertMaterial({ color: '#d9a37e' });
   private tg = new T.BufferGeometry(); private tP = new Float32Array(4 * 3 * 2 * 3); private tC = new Float32Array(4 * 3 * 2 * 3);
   private tells: T.LineSegments;
   private dotTex: T.CanvasTexture;
@@ -61,6 +52,8 @@ export class Scene3D {
   private A = new T.Vector3(); private B = new T.Vector3(); private C = new T.Vector3(); private P = new T.Vector3(); private Q = new T.Vector3(); private R = new T.Vector3();
   private amp = 1; private rt = 0;
   look: Look = { yaw: 0, pitch: 0, idle: 9 };
+  private sun!: T.DirectionalLight; private sunDir!: T.Vector3;
+  private shadows = !/Mobi|Android/i.test(navigator.userAgent);
   onBoom: (gybe: boolean) => void = () => {};
 
   constructor(canvas: HTMLCanvasElement) {
@@ -79,8 +72,27 @@ export class Scene3D {
       fragmentShader: 'uniform vec3 top,hor,sun;varying vec3 vP;void main(){float h=clamp(vP.y*1.8,0.,1.);vec3 c=mix(hor,top,pow(h,.5));float s=max(dot(vP,sun),0.);c+=vec3(1.,.88,.65)*(pow(s,900.)*3.+pow(s,10.)*.22);gl_FragColor=vec4(c,1.);}',
     })));
     scene.add(new T.HemisphereLight('#e4f3ff', '#1d5a7a', 0.75 * Math.PI));
-    const sl = new T.DirectionalLight('#fff1d6', 0.9 * Math.PI); sl.position.copy(sunDir).multiplyScalar(100); scene.add(sl);
+    scene.add(new T.AmbientLight('#ffffff', 0.25 * Math.PI));
+    const sl = new T.DirectionalLight('#fff1d6', 0.9 * Math.PI); sl.position.copy(sunDir).multiplyScalar(100); scene.add(sl); scene.add(sl.target);
+    this.sun = sl; this.sunDir = sunDir;
+    if (this.shadows) {
+      this.ren.shadowMap.enabled = true; this.ren.shadowMap.type = T.PCFSoftShadowMap;
+      sl.castShadow = true; sl.shadow.mapSize.set(2048, 2048);
+      const sc = sl.shadow.camera; sc.left = -28; sc.right = 28; sc.top = 28; sc.bottom = -28; sc.near = 1; sc.far = 220;
+      sl.shadow.bias = -0.0004; sl.shadow.normalBias = 0.04;
+    }
 
+    {
+      const envScene = new T.Scene();
+      envScene.add(new T.Mesh(new T.SphereGeometry(100, 32, 16), new T.ShaderMaterial({
+        side: T.BackSide, uniforms: { top: { value: new T.Color('#2569ad') }, hor: { value: FOG }, sun: { value: sunDir } },
+        vertexShader: 'varying vec3 vP;void main(){vP=normalize(position);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+        fragmentShader: 'uniform vec3 top,hor,sun;varying vec3 vP;void main(){float h=clamp(vP.y*1.8,0.,1.);vec3 c=vP.y<0.?vec3(.03,.16,.25):mix(hor,top,pow(h,.5));float s=max(dot(vP,sun),0.);c+=vec3(1.,.9,.7)*(pow(s,300.)*6.+pow(s,8.)*.3);gl_FragColor=vec4(c,1.);}',
+      })));
+      const pm = new T.PMREMGenerator(this.ren);
+      scene.environment = pm.fromScene(envScene, 0.02).texture; pm.dispose();
+      scene.environmentIntensity = 0.3; // reflets discrets : la lumière du soleil garde les vraies couleurs
+    }
     // nuages
     const cloudTex = (() => {
       const c = document.createElement('canvas'); c.width = 256; c.height = 128; const x = c.getContext('2d')!;
@@ -250,32 +262,6 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
   }
 
   // ---------- IMOCA ----------
-  private hullGeo(col: string): T.BufferGeometry {
-    const N = 40, M = 18, pos: number[] = [], cl: number[] = [], idx: number[] = [];
-    const c1 = new T.Color('#f4f7f9'), c2 = new T.Color(col), c3 = new T.Color('#1d2b33');
-    for (let i = 0; i <= N; i++) {
-      const t = i / N, w = HW(t), top = HT(t), bot = HB(t);
-      for (let j = 0; j <= M; j++) {
-        const th = -Math.PI / 2 + Math.PI * j / M, ct = Math.cos(th);
-        const y = top - (top - bot) * Math.pow(ct, 0.28); // fond plat, bouchains marqués
-        pos.push(w * Math.sin(th) * (0.82 + 0.18 * Math.pow(ct, 0.2)), y, HZ(t));
-        const c = y < 0.05 ? c3 : y < 0.45 && y > 0.18 ? c2 : c1; cl.push(c.r, c.g, c.b);
-      }
-    }
-    for (let i = 0; i < N; i++) for (let j = 0; j < M; j++) { const a = i * (M + 1) + j, b = a + 1, c = a + M + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
-    // tableau arrière
-    const tc = pos.length / 3; pos.push(0, (HT(1) + HB(1)) / 2, HZ(1)); cl.push(c1.r, c1.g, c1.b);
-    for (let j = 0; j < M; j++) idx.push(N * (M + 1) + j, tc, N * (M + 1) + j + 1);
-    const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new T.Float32BufferAttribute(cl, 3)); g.setIndex(idx); g.computeVertexNormals();
-    return g;
-  }
-  private deckGeo(): T.BufferGeometry {
-    const N = 40, dp: number[] = [], di: number[] = [];
-    for (let i = 0; i <= N; i++) { const t = i / N, w = HW(t) * 0.82, y = HT(t) - 0.01; dp.push(-w, y, HZ(t), w, y, HZ(t)); }
-    for (let i = 0; i < N; i++) { const a = i * 2; di.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
-    const dg = new T.BufferGeometry(); dg.setAttribute('position', new T.Float32BufferAttribute(dp, 3)); dg.setIndex(di); dg.computeVertexNormals();
-    return dg;
-  }
   private grid(): T.BufferGeometry {
     const g = new T.BufferGeometry(), p = new Float32Array((NU + 1) * (NV + 1) * 3), uv: number[] = [], idx: number[] = [];
     for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) uv.push(i / NU, j / NV);
@@ -283,71 +269,48 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     g.setAttribute('position', new T.BufferAttribute(p, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
     return g;
   }
-  private sailTex(num: string, col: string, name: string): T.CanvasTexture {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 1024; const x = c.getContext('2d')!;
-    x.fillStyle = '#e9ebe6'; x.fillRect(0, 0, 256, 1024);
-    x.strokeStyle = 'rgba(70,80,85,.35)'; x.lineWidth = 3;
-    for (let k = 1; k < 9; k++) { const y = 1024 - k * 112; x.beginPath(); x.moveTo(0, y); x.lineTo(256, y + 8); x.stroke(); } // lattes
-    x.fillStyle = 'rgba(40,50,55,.12)'; for (let k = 1; k < 4; k++) x.fillRect(0, 1024 - k * 135, 256, 2); // bandes de ris
-    x.fillStyle = col; x.fillRect(0, 300, 256, 70);
-    x.fillStyle = '#fff'; x.font = '800 44px "Barlow Condensed", sans-serif'; x.textAlign = 'center'; x.fillText(name.toUpperCase().slice(0, 10), 110, 350);
-    x.fillStyle = '#1d2b33'; x.font = '800 72px "Barlow Condensed", sans-serif'; x.fillText('FRA', 100, 520); x.font = '800 110px "Barlow Condensed", sans-serif'; x.fillText(num, 100, 630);
-    return new T.CanvasTexture(c);
-  }
-  private foilGeo(sign: number): T.BufferGeometry {
-    const pts = [new T.Vector3(0, 0.6, 0), new T.Vector3(1.4 * sign, 0.1, 0.1), new T.Vector3(2.6 * sign, -0.6, 0.2), new T.Vector3(3.2 * sign, -1.6, 0.25), new T.Vector3(3.0 * sign, -2.4, 0.3)];
-    return new T.TubeGeometry(new T.CatmullRomCurve3(pts), 24, 0.09, 6, false);
+  private headTexs = new Map<string, T.CanvasTexture>();
+  private headMap(id: string, col: string): T.CanvasTexture {
+    const k = id + col; let t = this.headTexs.get(k);
+    if (!t) { t = headTex(id === 'A3' ? col : id === 'C0' ? '#d4d9dc' : '#7d868c', col, id === 'A3'); this.headTexs.set(k, t); }
+    return t;
   }
 
   private mkBoat(b: Boat, num: string): Rec {
-    const dk = this.darkM, cf = this.carbon;
+    const M = mats();
     const yaw = new T.Group(), roll = new T.Group(); yaw.add(roll);
-    roll.add(new T.Mesh(this.hullGeo(b.col), new T.MeshPhongMaterial({ vertexColors: true, shininess: 70 })));
-    roll.add(new T.Mesh(this.deckGeo(), this.deckM));
-    // roof / casquette et cockpit
-    const roof = new T.Mesh(new T.BoxGeometry(2.2, 0.45, 3.6), new T.MeshPhongMaterial({ color: '#c3ccd2', shininess: 80 })); roof.position.set(0, HT(0.62) + 0.2, HZ(0.6)); roll.add(roof);
-    const win = new T.Mesh(new T.BoxGeometry(2.25, 0.18, 0.05), new T.MeshPhongMaterial({ color: '#1d2b33', shininess: 120 })); win.position.set(0, HT(0.62) + 0.25, HZ(0.6) - 1.8); roll.add(win);
-    const cock = new T.Mesh(new T.BoxGeometry(3.2, 0.12, 3.2), dk); cock.position.set(0, HT(0.85) - 0.2, HZ(0.85)); roll.add(cock);
-    const bow = new T.Mesh(new T.CylinderGeometry(0.06, 0.08, 2.4, 8), cf); bow.rotation.x = Math.PI / 2; bow.position.set(0, HT(0) - 0.1, HZ(0) - 1.1); roll.add(bow);
-    // mât, bôme
-    const mast = new T.Mesh(new T.BoxGeometry(0.22, 29, 0.38), cf); mast.position.set(0, DECK + 14.5, MAST_Z); roll.add(mast);
-    const boomG = new T.Group(); boomG.position.set(0, DECK + 2.3, MAST_Z + 0.2); roll.add(boomG);
-    const boom = new T.Mesh(new T.BoxGeometry(0.16, 0.3, 7.2), cf); boom.position.z = 3.6; boomG.add(boom);
-    const mg = this.grid(); boomG.add(new T.Mesh(mg, new T.MeshLambertMaterial({ map: this.sailTex(num, b.col, b.name), side: T.DoubleSide, transparent: true, opacity: 0.95 })));
-    const hg = this.grid(), hmesh = new T.Mesh(hg, new T.MeshLambertMaterial({ color: '#e9ebe6', side: T.DoubleSide, transparent: true, opacity: 0.92 })); roll.add(hmesh);
-    // quille pendulaire
-    const keelG = new T.Group(); keelG.position.set(0, -0.2, HZ(0.5)); roll.add(keelG);
-    const fin = new T.Mesh(new T.BoxGeometry(0.14, 4.4, 0.9), dk); fin.position.y = -2.2; keelG.add(fin);
-    const bulb = new T.Mesh(new T.CapsuleGeometry(0.42, 2.6, 6, 12), dk); bulb.rotation.x = Math.PI / 2; bulb.position.set(0, -4.5, 0.2); keelG.add(bulb);
-    // foils
-    const foilM = new T.MeshLambertMaterial({ color: '#1f2a30' });
-    const foilP = new T.Group(), foilS = new T.Group();
-    foilP.add(new T.Mesh(this.foilGeo(-1), foilM)); foilS.add(new T.Mesh(this.foilGeo(1), foilM));
-    foilP.position.set(-1.2, 0.1, HZ(0.36)); foilS.position.set(1.2, 0.1, HZ(0.36)); roll.add(foilP, foilS);
-    // safrans
-    const ruds = [-1.7, 1.7].map(x => { const g = new T.Group(); g.position.set(x, 0.2, HZ(0.97)); const bl = new T.Mesh(new T.BoxGeometry(0.06, 2.6, 0.45), dk); bl.position.y = -1.2; g.add(bl); roll.add(g); return g; });
-    // skipper
+    const parts = buildImoca(roll, b.col, b.name, num);
+    const mg = this.grid(), main = new T.Mesh(mg, new T.MeshStandardMaterial({ map: mainTex(num, b.col, b.name), side: T.DoubleSide, roughness: 0.55, metalness: 0.05 }));
+    main.castShadow = true; parts.boomG.add(main);
+    const hg = this.grid(), hmesh = new T.Mesh(hg, new T.MeshStandardMaterial({ map: this.headMap('J1', b.col), side: T.DoubleSide, roughness: 0.6, transparent: true, opacity: 0.97 }));
+    hmesh.castShadow = true; roll.add(hmesh);
+    // skipper en ciré, casque
     const sailor = new T.Group(); roll.add(sailor);
-    const torso = new T.Mesh(new T.CylinderGeometry(0.2, 0.22, 0.7, 10), new T.MeshLambertMaterial({ color: b.col })); torso.position.y = 0.75; sailor.add(torso);
-    const head = new T.Mesh(new T.SphereGeometry(0.14, 12, 8), this.skin); head.position.y = 1.25; sailor.add(head);
-    const legs = new T.Mesh(new T.BoxGeometry(0.4, 0.5, 0.25), dk); legs.position.y = 0.25; sailor.add(legs);
-    const armG = new T.BoxGeometry(0.1, 0.1, 0.55); armG.translate(0, 0, -0.27);
-    const armL = new T.Mesh(armG, new T.MeshLambertMaterial({ color: b.col })), armR = armL.clone();
-    armL.position.set(-0.24, 0.95, 0); armR.position.set(0.24, 0.95, 0); sailor.add(armL, armR);
+    const jacket = new T.MeshStandardMaterial({ color: b.col, roughness: 0.6 }), pants = new T.MeshStandardMaterial({ color: '#23292e', roughness: 0.8 });
+    const torso = new T.Mesh(new T.CapsuleGeometry(0.2, 0.42, 4, 10), jacket); torso.position.y = 1.02; sailor.add(torso);
+    const head = new T.Mesh(new T.SphereGeometry(0.13, 14, 10), M.skin); head.position.y = 1.5; sailor.add(head);
+    const helmet = new T.Mesh(new T.SphereGeometry(0.145, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), new T.MeshStandardMaterial({ color: '#f4f4f2', roughness: 0.3 })); helmet.position.y = 1.53; head.add(helmet); helmet.position.set(0, 0.03, 0);
+    for (const sx of [-1, 1]) { const leg = new T.Mesh(new T.CapsuleGeometry(0.09, 0.55, 4, 8), pants); leg.position.set(sx * 0.11, 0.4, 0); sailor.add(leg); }
+    const armG = new T.CapsuleGeometry(0.065, 0.45, 4, 8); armG.rotateX(Math.PI / 2); armG.translate(0, 0, -0.26);
+    const armL = new T.Mesh(armG, jacket), armR = armL.clone();
+    armL.position.set(-0.26, 1.22, 0); armR.position.set(0.26, 1.22, 0); sailor.add(armL, armR);
+    sailor.traverse(o => { (o as T.Mesh).castShadow = true; });
     const lb = this.label(b.name, 'rgba(4,30,50,.6)'); lb.position.y = 33; yaw.add(lb);
     this.scene.add(yaw);
-    return { yaw, roll, boomG, keelG, foilP, foilS, ruds, mg, hg, hmesh, sailor, armL, armR, head, lb, name: b.name, heel: 0, used: true, headId: '' };
+    return { yaw, roll, boomG: parts.boomG, mast: parts.mast, keelG: parts.keelG, foilP: parts.foilP, foilS: parts.foilS, ruds: parts.ruds, mg, hg, hmesh, sailor, armL, armR, head, lb, name: b.name, heel: 0, used: true, headId: '' };
   }
 
-  /** Grand-voile : guindant de hauteur h, bordure sur la bôme, tête carrée. */
+  /** Grand-voile : guindant le long du mât, bordure sur la bôme, rond de chute et tête carrée. */
   private setMain(g: T.BufferGeometry, side: number, h: number, camber: number, fl: boolean, tm: number): void {
     const p = (g.attributes.position as T.BufferAttribute).array as Float32Array; let k = 0;
     for (let j = 0; j <= NV; j++) {
-      const v = j / NV, ch = 7.0 * (1 - v) + 2.4 * v;
+      const v = j / NV, ch = 7.0 * (1 - v) + 2.9 * v + 1.1 * Math.sin(Math.PI * Math.pow(v, 0.8)) * (1 - v * 0.3);
+      const twist = 0.22 * v * v;
       for (let i = 0; i <= NU; i++) {
-        const u = i / NU, bulge = 4 * u * (1 - u);
-        p[k++] = side * camber * ch * 0.12 * bulge * (1 - v * 0.3) + (fl ? Math.sin(tm * 20 + u * 9 + v * 5) * 0.25 * u : 0);
-        p[k++] = v * h + 0.05; p[k++] = u * ch;
+        const u = i / NU, bulge = 4 * u * (1 - u) * (1 - 0.35 * u);
+        let x = side * camber * ch * 0.13 * bulge * (1 - v * 0.25) + side * u * ch * twist;
+        if (fl) x += Math.sin(tm * 20 + u * 9 + v * 5) * 0.28 * u;
+        p[k++] = x; p[k++] = v * h + 0.05; p[k++] = u * ch - 0.1 * Math.sin(Math.PI * v) ;
       }
     }
     g.attributes.position.needsUpdate = true; g.computeVertexNormals(); g.computeBoundingSphere();
@@ -356,10 +319,10 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
   /** Voile d'avant : point d'amure, tête, point d'écoute selon l'angle d'écoute delta (°). */
   private setHead(r: Rec, b: Boat, side: number, delta: number, pow: number, fl: boolean, tm: number): void {
     const s = b.cls.heads[b.head], id = s.id;
-    const geo = { J1: [0, 25, 7.2, 1.3, 0.1], J2: [0.3, 22.5, 6.2, 1.5, 0.1], J3: [2.6, 17.5, 4.4, 1.9, 0.09], C0: [-2.3, 28, 9.5, 1.2, 0.08], A3: [-2.3, 28, 12, 1.6, 0.32] }[id] ?? [0, 25, 7, 1.3, 0.1];
+    const geo = { J1: [0.1, 24.8, 7.4, 0.5, 0.11], J2: [0.3, 22.5, 6.4, 0.9, 0.1], J3: [2.6, 17.3, 4.6, 1.4, 0.09], C0: [-2.3, 28.3, 10, 0.9, 0.09], A3: [-2.3, 28.3, 12.5, 1.4, 0.3] }[id] ?? [0, 25, 7, 1.3, 0.1];
     const [tz, hh, foot, clewH, belly] = geo;
     const { A, B, C, P, Q, R } = this;
-    A.set(0, HT(0) + 0.3, HZ(0) + tz); B.set(0, DECK + hh, MAST_Z - 0.4);
+    A.set(0, deckY(0, 0) + 0.25, HZ(0) + tz); B.set(0, DECK + hh, MAST_Z - 0.5);
     // le point d'écoute s'éloigne vers sous le vent avec l'angle d'écoute ; affalée (pow→0) : roulée sur l'étai
     const dRad = delta * D, len = foot * (0.15 + 0.85 * pow);
     C.set(side * Math.sin(dRad) * len, A.y + clewH, A.z + Math.cos(dRad) * len);
@@ -376,7 +339,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       }
     }
     r.hg.attributes.position.needsUpdate = true; r.hg.computeVertexNormals(); r.hg.computeBoundingSphere();
-    if (r.headId !== id) { r.hmesh.material.color.set(s.color || '#e9ebe6'); r.headId = id; }
+    if (r.headId !== id) { r.hmesh.material.map = this.headMap(id, b.col); r.hmesh.material.needsUpdate = true; r.headId = id; }
   }
 
   private setTells(r: Rec, b: Boat, side: number, tm: number): void {
@@ -425,6 +388,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     r.prevS = ss;
     const md = mainAngle(b.mainSheet, b.trav), mf = b.knock > 0 || aa < md + 2;
     r.boomG.rotation.y = ss * clamp(md, -6, 85) * D * sa;
+    r.mast.rotation.y = r.boomG.rotation.y * 0.45; // mât-aile pivotant
     const reefH = [27, 23.5, 20, 16.5][b.reefs];
     const camber = mf ? 0.05 : 0.6 + 0.5 * clamp(1 - Math.abs(b.mainSheet - b.ideal.mainSheet) * 3, 0, 1);
     this.setMain(r.mg, ss, reefH * (0.6 + 0.4 * b.mainPow), camber, mf, tm + X);
@@ -438,7 +402,8 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     // skipper : à la barre/au pilote dans le cockpit, aux winchs pendant une manœuvre
     const busy = !!b.task || Math.abs(b.mainSheet - b.ideal.mainSheet) > 0.08;
     r.sailor.visible = b.knock <= 0 && !(isMe && pov);
-    r.sailor.position.set(-tack * 1.1, HT(0.85) - 0.25, HZ(busy ? 0.78 : 0.88));
+    const st = busy ? 0.87 : 0.92, sx = -tack * (busy ? 0.35 : 1.05);
+    r.sailor.position.set(sx, deckY(st, sx / HW(st)), HZ(st));
     r.sailor.rotation.y = busy ? tack * 0.6 : 0;
     const ph = tm * 7;
     r.armL.rotation.x = busy ? 0.9 + Math.sin(ph) * 0.8 : 0.5; r.armR.rotation.x = busy ? 0.9 + Math.sin(ph + Math.PI) * 0.8 : 0.5;
@@ -499,7 +464,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     if (pov && mr) {
       // vue cockpit : à la barre, derrière la casquette
       mr.yaw.updateMatrixWorld(true);
-      this.hw.set(-(me.twa >= 0 ? 1 : -1) * 2.3, HT(0.9) + 2.1, HZ(0.92)); mr.roll.localToWorld(this.hw);
+      this.hw.set(-(me.twa >= 0 ? 1 : -1) * 1.9, deckY(0.93, 0.7) + 1.75, HZ(0.93)); mr.roll.localToWorld(this.hw);
       cam.position.copy(this.hw);
       const tack = me.twa >= 0 ? 1 : -1;
       this.eul.set(-0.06 + mr.roll.rotation.x * 0.6 + look.pitch, -me.h + look.yaw, -tack * mr.heel * 0.55, 'YXZ'); cam.quaternion.setFromEuler(this.eul);
@@ -542,6 +507,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       cam.rotateX(Math.sin(tm * 23) * s * 0.6 + Math.sin(tm * 41) * s * 0.4);
       cam.rotateZ(Math.sin(tm * 17 + 1) * s * 0.5);
     }
+    this.sun.position.set(me.x + this.sunDir.x * 100, this.sunDir.y * 100, me.y + this.sunDir.z * 100); this.sun.target.position.set(me.x, 0, me.y);
     this.ren.render(this.scene, cam);
   }
 
