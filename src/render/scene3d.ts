@@ -3,7 +3,7 @@
 import * as T from 'three';
 import { D, TAU, clamp, norm } from '../util/math';
 import { WV, waveH } from '../physics/waves';
-import { ISLANDS, shoreR } from '../physics/world';
+import { ISLANDS, shoreR, islandHeight } from '../physics/world';
 import type { Game } from '../game/game';
 import type { Boat } from '../physics/boat';
 import { headAngle, mainAngle } from '../physics/model';
@@ -13,6 +13,7 @@ const f = (v: number) => v.toFixed(5);
 
 import { HZ, HW, deckY, MAST_Z, DECK, WINCHES, TRAV_T, buildImoca, mainTex, headTex, mats } from './imoca';
 import { Rope, braidTex } from './rope';
+import { Decor } from './decor';
 
 const NU = 12, NV = 22;
 
@@ -60,6 +61,7 @@ export class Scene3D {
   private arcKey = '';
   private arcPts: { x: number; z: number; h: number }[] = [];
   private projV = new T.Vector3();
+  private decor!: Decor;
   private arrow!: T.Mesh<T.ShapeGeometry, T.MeshBasicMaterial>;
   private drops: Drop[] = [];
   private gTimer = 0; private camYaw: number | null = null; private lastFov = 0;
@@ -133,11 +135,11 @@ export class Scene3D {
       const Q = st / (k * A), w = Math.sqrt(9.8 * k);
       return `{float ph=${f(k)}*dot(vec2(${f(dx)},${f(dz)}),p0)-t*${f(w)};float c=cos(ph),s=sin(ph);P.x+=a*${f(Q * A * dx)}*c;P.z+=a*${f(Q * A * dz)}*c;P.y+=a*${f(A)}*s;N.x-=a*${f(dx * k * A)}*c;N.z-=a*${f(dz * k * A)}*c;N.y-=a*${f(st)}*s;J-=a*${f(st)}*s;}`;
     }).join('');
-    this.wU = { amp: { value: 1 }, t: { value: 0 }, off: { value: new T.Vector2() }, sun: { value: sunDir }, gT: { value: this.gTex }, gC: { value: new T.Vector2() }, gS: { value: this.gS }, fogC: { value: FOG } };
+    this.wU = { amp: { value: 1 }, t: { value: 0 }, off: { value: new T.Vector2() }, sun: { value: sunDir }, gT: { value: this.gTex }, gC: { value: new T.Vector2() }, gS: { value: this.gS }, fogC: { value: FOG }, isl: { value: ISLANDS.map(i => new T.Vector4(i.x, i.y, i.r, i.seed)) } };
     const water = new T.Mesh(this.radialGrid(150, 256, 12000), new T.ShaderMaterial({
       uniforms: this.wU,
       vertexShader: 'uniform float t,amp;uniform vec2 off;varying vec3 vW;varying vec3 vN;varying float vJ;void main(){vec2 p0=position.xz+off;float a=amp*(1.-smoothstep(900.,2600.,length(position.xz)));vec3 P=vec3(p0.x,0.,p0.y);vec3 N=vec3(0.,1.,0.);float J=1.;' + waves + 'vN=normalize(N);vJ=J;vW=P;gl_Position=projectionMatrix*viewMatrix*vec4(P,1.);}',
-      fragmentShader: `uniform vec3 sun,fogC;uniform float t,gS;uniform sampler2D gT;uniform vec2 gC;varying vec3 vW,vN;varying float vJ;
+      fragmentShader: `uniform vec3 sun,fogC;uniform float t,gS;uniform sampler2D gT;uniform vec2 gC;uniform vec4 isl[${ISLANDS.length}];varying vec3 vW,vN;varying float vJ;
 float hs(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float vn(vec2 p){vec2 i=floor(p),q=fract(p);q=q*q*(3.-2.*q);return mix(mix(hs(i),hs(i+vec2(1.,0.)),q.x),mix(hs(i+vec2(0.,1.)),hs(i+vec2(1.,1.)),q.x),q.y);}
 void main(){float d=length(cameraPosition.xz-vW.xz);float fd=1.-smoothstep(40.,500.,d);
@@ -152,6 +154,9 @@ float fn=vn(vW.xz*.9+t*.3)*.6+vn(vW.xz*3.1-t*.2)*.4;
 float foam=smoothstep(.55,.3,vJ)*(.45+g)*smoothstep(.4,.75,fn);
 foam+=g*smoothstep(.74,.9,vn(vW.xz*.22+vec2(t*.05,-t*.35)))*smoothstep(.45,.8,fn)*.9;
 c=mix(c,vec3(.93,.96,.98),clamp(foam,0.,1.)*mix(.2,1.,fd));
+float sh=1e9;for(int i=0;i<${ISLANDS.length};i++){vec4 I=isl[i];vec2 q=vW.xz-I.xy;float th=atan(q.y,q.x),s=I.w;float R=I.z*(1.+.12*sin(3.*th+s)+.07*sin(5.*th+2.*s)+.04*sin(9.*th+3.*s));sh=min(sh,length(q)-R*1.04);}
+float shallow=smoothstep(450.,0.,sh);c=mix(c,mix(vec3(.05,.42,.45),vec3(.35,.75,.7),smoothstep(150.,0.,sh)),shallow*.55*(1.-fr*.6));
+c=mix(c,vec3(.95,.97,.98),smoothstep(90.,0.,sh)*smoothstep(.35,.7,vn(vW.xz*.15+vec2(t*.3,0.))+.3*sin(sh*.15-t*1.5))*.8);
 c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     }));
     water.frustumCulled = false; scene.add(water);
@@ -211,6 +216,13 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
         m.renderOrder = 5; scene.add(m); this.arcArrows.push(m);
       }
     }
+    // décor vivant (îles habitées, spectateurs, faune…) ; les dauphins font des gerbes
+    this.decor = new Decor(scene, (x, y, z, n) => {
+      for (let i = 0; i < n && this.drops.length < 850; i++) {
+        const a = Math.random() * TAU, sp = 1 + Math.random() * 2;
+        this.drops.push({ x, y, z, vx: Math.cos(a) * sp, vy: 2 + Math.random() * 3, vz: Math.sin(a) * sp, a: 0 });
+      }
+    });
     let drag: { x: number; y: number } | null = null;
     canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; try { canvas.setPointerCapture(e.pointerId); } catch { /* */ } });
     canvas.addEventListener('pointermove', e => {
@@ -246,10 +258,9 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       const rho = 1.08 - i / RN * 1.08; // de la plage (1.08) au sommet (0)
       for (let j = 0; j < SN; j++) {
         const th = j / SN * TAU, R = shoreR(isl, th) * rho;
-        const bump = Math.sin(th * 4 + isl.seed * 3) * 0.08 + Math.sin(th * 7 + isl.seed) * 0.05;
-        const y = rho > 1 ? -2.5 : isl.h * Math.pow(1 - rho * rho, 0.9) * (1 + bump) + 0.8;
+        const y = islandHeight(isl, th, rho);
         pos.push(isl.x + Math.cos(th) * R, y, isl.y + Math.sin(th) * R);
-        const c = y < 4 ? sand : y > isl.h * 0.8 ? rock : (j + i) % 3 ? green : dark;
+        const c = y < 4 ? sand : y > isl.h * 1.45 || (rho > 0.9 && y > 12) ? rock : (j + i) % 3 ? green : dark;
         col.push(c.r, c.g, c.b);
       }
     }
@@ -260,7 +271,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new T.Float32BufferAttribute(col, 3)); g.setIndex(idx); g.computeVertexNormals();
     grp.add(new T.Mesh(g, new T.MeshLambertMaterial({ vertexColors: true })));
     if (isl.lighthouse) {
-      const th = 0.6, R = shoreR(isl, th) * 0.75, x = isl.x + Math.cos(th) * R, z = isl.y + Math.sin(th) * R, y0 = isl.h * Math.pow(1 - 0.5625, 0.9);
+      const th = 0.6, R = shoreR(isl, th) * 0.75, x = isl.x + Math.cos(th) * R, z = isl.y + Math.sin(th) * R, y0 = islandHeight(isl, th, 0.75) - 1;
       const ph = new T.Mesh(new T.CylinderGeometry(3, 4.2, 30, 12), new T.MeshLambertMaterial({ color: '#f2f2f2' })); ph.position.set(x, y0 + 15, z); grp.add(ph);
       const tp = new T.Mesh(new T.CylinderGeometry(3.3, 3.3, 6, 12), new T.MeshLambertMaterial({ color: '#c8371e' })); tp.position.set(x, y0 + 33, z); grp.add(tp);
     }
@@ -606,6 +617,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       if (b === me) meR = r;
     });
     for (const r of this.boats3.values()) r.yaw.visible = r.used;
+    this.decor.update(g, boats, me, dt, rt, this.amp);
     // sillage
     const wake = this.wake; let n = 0;
     for (const b of boats) for (const w of b.wake) {

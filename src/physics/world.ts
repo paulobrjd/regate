@@ -17,6 +17,13 @@ export function shoreR(isl: Island, th: number): number {
   return isl.r * (1 + 0.12 * Math.sin(3 * th + s) + 0.07 * Math.sin(5 * th + 2 * s) + 0.04 * Math.sin(9 * th + 3 * s));
 }
 
+/** Altitude du terrain (m) : th direction (rad), rho ∈ [0,1] du sommet au rivage. */
+export function islandHeight(isl: Island, th: number, rho: number): number {
+  const bump = Math.sin(th * 4 + isl.seed * 3) * 0.1 + Math.sin(th * 7 + isl.seed) * 0.06;
+  const hills = 0.18 * Math.sin(th * 3 + isl.seed * 5) * Math.sin(rho * 6 + isl.seed) + 0.08 * Math.sin(th * 11 + rho * 9);
+  return rho > 1 ? -2.5 : isl.h * 1.7 * Math.pow(1 - rho * rho, 0.6) * (1 + bump + hills) + 0.8;
+}
+
 /** Île sur laquelle se trouve le point (avec une marge en m), ou null. */
 export function islandAt(x: number, y: number, margin = 0): Island | null {
   for (const isl of ISLANDS) {
