@@ -14,7 +14,8 @@ import { LEVELS, mkAI, aiSteer, type AI } from '../ai/bot';
 import { vmgAngles } from '../physics/polar';
 import { norm } from '../util/math';
 import { applyAssist, newMem, ASSISTS, type Assist, type AssistMem } from './assist';
-import { COURSES, crossesRay, segCross, type Course } from './course';
+import { crossesRay, segCross, type Course } from './course';
+import { activateVenue, type Venue } from './venue';
 
 /** Durée du compte à rebours avant le départ (s). */
 export const PRE = 60;
@@ -37,7 +38,10 @@ export interface GameOpts {
   met?: number;
   bots?: number;
   lvl?: number;
+  venue?: string;
   course?: string;
+  /** Ciel : auto, soleil, nuageux, pluie, brume, couchant. */
+  sky?: string;
   assist?: Assist;
   name?: string;
   col?: string;
@@ -57,6 +61,10 @@ export class Game {
   readonly wind: WindField;
   readonly rng: Rng;
   readonly course: Course;
+  readonly venue: Venue;
+  readonly sky: string;
+  /** Amplitude de la houle (météo × plan d'eau). */
+  readonly waveAmp: number;
   readonly cls: BoatClass;
   readonly cal: Calibration;
   assist: Assist;
@@ -94,8 +102,12 @@ export class Game {
     this.met = METEO[o.met ?? 1];
     this.seed = o.seed ?? Math.random() * 10;
     this.rng = makeRng(this.seed * 1e6 + 1);
-    this.wind = new WindField(this.seed, this.met);
-    this.course = COURSES.find(c => c.id === o.course) ?? COURSES[0];
+    const vc = activateVenue(o.venue ?? 'baie');
+    this.venue = vc.venue;
+    this.course = vc.courses.find(c => c.id === o.course) ?? vc.courses[0];
+    this.wind = new WindField(this.seed, this.met, this.venue.shifts, this.venue.gusts);
+    this.waveAmp = this.met.amp * this.venue.waves;
+    this.sky = o.sky && o.sky !== 'auto' ? o.sky : (this.met.sky ?? 'soleil');
     this.cls = o.cls ?? IMOCA;
     this.cal = calibration(this.cls);
     this.assist = o.assist ?? ASSISTS.equipier.a;
@@ -136,7 +148,7 @@ export class Game {
     this.env = {
       wd: this.wd,
       wind: (x, y) => this.wind.speedAt(x, y, this.t),
-      wave: (x, y) => waveH(x, y, this.simT, this.met.amp),
+      wave: (x, y) => waveH(x, y, this.simT, this.waveAmp),
       waveC: Math.sqrt(9.8 / k),
       cal: this.cal,
       rnd: this.rng,

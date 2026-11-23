@@ -5,6 +5,7 @@ import { ISLANDS, shoreR, islandHeight, type Island } from '../physics/world';
 import { waveH } from '../physics/waves';
 import { makeRng, norm, TAU, clamp } from '../util/math';
 import type { Game } from '../game/game';
+import type { Venue } from '../game/venue';
 import type { Boat } from '../physics/boat';
 
 const std = (color: string, rough = 0.7) => new T.MeshStandardMaterial({ color, roughness: rough });
@@ -21,12 +22,13 @@ export class Decor {
   private heli = new T.Group(); private heliRotor = new T.Group(); private heliTail = new T.Group(); private heliA = 0;
   private gulls: Gull[] = [];
   private dolphins: Dolphin[] = []; private dolTimer = 25; private dolActive = 0;
+  /** Décor propre au plan d'eau (forêts, villages, port, montagnes), reconstruit à chaque changement. */
+  private islandG = new T.Group(); private windG = new T.Group(); private mountG: T.Group | null = null;
+  private venue: Venue | null = null;
 
   constructor(private scene: T.Scene, private splash: (x: number, y: number, z: number, n: number) => void) {
     const rng = makeRng(2024);
-    this.forests(rng);
-    this.villages(rng);
-    this.harbour(rng);
+    scene.add(this.islandG, this.windG);
     this.windFarm();
     this.cargo();
     this.spectators(rng);
@@ -36,6 +38,37 @@ export class Decor {
   }
 
   private wh(x: number, z: number): number { return waveH(x, z, this.rt, this.amp); }
+
+  /** Change de plan d'eau : reconstruit le décor des îles, montre ou cache le reste. */
+  setVenue(v: Venue): void {
+    if (this.venue === v) return;
+    this.venue = v;
+    for (const c of [...this.islandG.children]) { this.islandG.remove(c); c.traverse(o => { const m = o as T.Mesh; if (m.geometry) m.geometry.dispose(); }); }
+    const rng = makeRng(2024 + v.id.length);
+    this.forests(rng); this.villages(rng); this.harbour(rng);
+    this.windG.visible = !!v.decor.windFarm;
+    this.ship.visible = !!v.decor.cargo;
+    for (const s of this.spect) { s.g.visible = !!v.decor.spectators; s.wake.visible = !!v.decor.spectators; }
+    if (v.decor.mountains && !this.mountG) this.mountG = this.mountains();
+    if (this.mountG) this.mountG.visible = !!v.decor.mountains;
+  }
+
+  /** Lac de montagne : collines boisées qui ferment le lac, sommets enneigés derrière. */
+  private mountains(): T.Group {
+    const g = new T.Group(), rng = makeRng(77), cx = 0, cz = -3000;
+    const rock = std('#7d7368', 0.95), snow = std('#f4f7f9', 0.6), hill = std('#3f5a37', 0.95), hill2 = std('#4d6a40', 0.95);
+    for (let i = 0; i < 70; i++) {
+      const a = i / 70 * TAU + rng() * 0.05, r = 4700 + rng() * 900, h = 140 + rng() * 260, br = 700 + rng() * 600;
+      const m = new T.Mesh(new T.ConeGeometry(br, h, 9), rng() < 0.5 ? hill : hill2); m.position.set(cx + Math.cos(a) * r, h / 2 - 5, cz + Math.sin(a) * r); g.add(m);
+    }
+    for (let i = 0; i < 46; i++) {
+      const a = i / 46 * TAU + rng() * 0.1, r = 7000 + rng() * 3000, h = 700 + rng() * 1200, br = 1500 + rng() * 1300;
+      const m = new T.Mesh(new T.ConeGeometry(br, h, 7), rock); m.position.set(cx + Math.cos(a) * r, h / 2 - 20, cz + Math.sin(a) * r); m.rotation.y = rng() * 3; g.add(m);
+      const cap = new T.Mesh(new T.ConeGeometry(br * 0.36, h * 0.36, 7), snow); cap.position.set(m.position.x, h - 20 - h * 0.18, m.position.z); cap.rotation.y = m.rotation.y; g.add(cap);
+    }
+    this.scene.add(g);
+    return g;
+  }
 
   // ---------- îles ----------
   private forests(rng: () => number): void {
@@ -55,11 +88,11 @@ export class Decor {
       m.makeScale(p.s, p.h, p.s); m.setPosition(p.x, p.y - 0.5, p.z); trees.setMatrixAt(i, m);
       c.setHSL(0.28 + rng() * 0.06, 0.45, 0.17 + rng() * 0.1); trees.setColorAt(i, c);
     });
-    trees.castShadow = false; this.scene.add(trees);
+    trees.castShadow = false; this.islandG.add(trees);
   }
 
   private villages(rng: () => number): void {
-    const spots: [number, number][] = [[4, 45], [0, 22], [1, 20], [5, 18], [3, 6]]; // [île, nombre de maisons]
+    const spots: [number, number][] = ISLANDS.map((isl, i) => [i, isl.village ?? 0] as [number, number]).filter(s => s[1] > 0);
     const walls: T.Matrix4[] = [], roofs: T.Matrix4[] = [], wc: T.Color[] = [], rc: T.Color[] = [];
     const roofCols = ['#b5523b', '#c0643f', '#5d6770', '#9c4a36'], wallCols = ['#f3eee2', '#ffffff', '#efe3cf', '#e8eef2'];
     for (const [ii, n] of spots) {
@@ -80,26 +113,30 @@ export class Decor {
     const W = new T.InstancedMesh(box, std('#ffffff', 0.8), walls.length), R = new T.InstancedMesh(prism, std('#ffffff', 0.8), roofs.length);
     walls.forEach((m, i) => { W.setMatrixAt(i, m); W.setColorAt(i, wc[i]); });
     roofs.forEach((m, i) => { R.setMatrixAt(i, m); R.setColorAt(i, rc[i]); });
-    this.scene.add(W, R);
-    // clocher sur l'Île Longue
-    const isl = ISLANDS[4], th = Math.atan2(-isl.y, -isl.x) + 0.05, rho = 0.72, Rr = shoreR(isl, th) * rho;
-    const x = isl.x + Math.cos(th) * Rr, z = isl.y + Math.sin(th) * Rr, y = islandHeight(isl, th, rho);
-    const tower = new T.Mesh(new T.BoxGeometry(6, 26, 6), std('#ece6d8')); tower.position.set(x, y + 12, z); this.scene.add(tower);
-    const spire = new T.Mesh(new T.ConeGeometry(4.6, 12, 4), std('#5d6770')); spire.position.set(x, y + 31, z); spire.rotation.y = Math.PI / 4; this.scene.add(spire);
+    if (walls.length) this.islandG.add(W, R);
+    // clochers
+    for (const isl of ISLANDS) if (isl.church) {
+      const th = Math.atan2(-isl.y, -isl.x) + 0.05, rho = 0.72, Rr = shoreR(isl, th) * rho;
+      const x = isl.x + Math.cos(th) * Rr, z = isl.y + Math.sin(th) * Rr, y = islandHeight(isl, th, rho);
+      const tower = new T.Mesh(new T.BoxGeometry(7, 30, 7), std('#ece6d8')); tower.position.set(x, y + 14, z); this.islandG.add(tower);
+      const spire = new T.Mesh(new T.ConeGeometry(5.4, 14, 4), std('#5d6770')); spire.position.set(x, y + 36, z); spire.rotation.y = Math.PI / 4; this.islandG.add(spire);
+    }
   }
 
   private harbour(rng: () => number): void {
-    const isl: Island = ISLANDS[4], th0 = Math.atan2(-isl.y, -isl.x) + 0.32;
+    const isl: Island | undefined = ISLANDS.find(i => i.harbour);
+    if (!isl) return;
+    const th0 = Math.atan2(-isl.y, -isl.x) + 0.32;
     const shore = (th: number, k = 1) => { const R = shoreR(isl, th) * k; return [isl.x + Math.cos(th) * R, isl.y + Math.sin(th) * R]; };
     // digue en enrochements, en arc depuis la côte
     const rockM = std('#8d8a83', 0.95);
     for (let i = 0; i < 26; i++) {
       const f = i / 25, th = th0 + 0.12 * f, k = 1.0 + 0.16 * Math.sin(f * Math.PI * 0.9);
       const [x, z] = shore(th, k);
-      const b = new T.Mesh(new T.BoxGeometry(22, 5, 14), rockM); b.position.set(x, 0.5, z); b.rotation.y = -th; this.scene.add(b);
+      const b = new T.Mesh(new T.BoxGeometry(22, 5, 14), rockM); b.position.set(x, 0.5, z); b.rotation.y = -th; this.islandG.add(b);
     }
     const [lx, lz] = shore(th0 + 0.12, 1.12);
-    const light = new T.Mesh(new T.CylinderGeometry(1.4, 1.8, 9, 10), std('#2e8b57')); light.position.set(lx, 5, lz); this.scene.add(light);
+    const light = new T.Mesh(new T.CylinderGeometry(1.4, 1.8, 9, 10), std('#2e8b57')); light.position.set(lx, 5, lz); this.islandG.add(light);
     // voiliers au mouillage
     const hullG = new T.BoxGeometry(3, 1.4, 10); const mastG = new T.CylinderGeometry(0.08, 0.1, 13, 5); mastG.translate(0, 7, 0);
     const N = 18, hulls = new T.InstancedMesh(hullG, std('#f4f6f7', 0.4), N), masts = new T.InstancedMesh(mastG, std('#c9ced3', 0.4), N);
@@ -108,7 +145,7 @@ export class Decor {
       const th = th0 + 0.01 + rng() * 0.1, [x, z] = shore(th, 1.03 + rng() * 0.08), rot = rng() * TAU;
       m.makeRotationY(rot); m.setPosition(x, 0.4, z); hulls.setMatrixAt(i, m); masts.setMatrixAt(i, m);
     }
-    this.scene.add(hulls, masts);
+    this.islandG.add(hulls, masts);
   }
 
   // ---------- au large ----------
@@ -117,12 +154,12 @@ export class Decor {
     const blade = new T.BoxGeometry(1.6, 46, 0.4); blade.translate(0, 23, 0);
     for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
       const x = 4700 + i * 800 + (j % 2) * 280, z = -6600 + j * 800;
-      const tower = new T.Mesh(new T.CylinderGeometry(2.4, 4, 110, 12), white); tower.position.set(x, 55, z); this.scene.add(tower);
-      const nac = new T.Mesh(new T.BoxGeometry(5, 5, 12), white); nac.position.set(x, 111, z); this.scene.add(nac);
-      const rotor = new T.Group(); rotor.position.set(x, 111, z - 6.5); this.scene.add(rotor);
+      const tower = new T.Mesh(new T.CylinderGeometry(2.4, 4, 110, 12), white); tower.position.set(x, 55, z); this.windG.add(tower);
+      const nac = new T.Mesh(new T.BoxGeometry(5, 5, 12), white); nac.position.set(x, 111, z); this.windG.add(nac);
+      const rotor = new T.Group(); rotor.position.set(x, 111, z - 6.5); this.windG.add(rotor);
       for (let k = 0; k < 3; k++) { const b = new T.Mesh(blade, white); b.rotation.z = k * TAU / 3; rotor.add(b); }
       rotor.rotation.z = i + j; this.rotors.push(rotor);
-      const base = new T.Mesh(new T.CylinderGeometry(4.5, 4.5, 6, 12), std('#e8c547')); base.position.set(x, 1, z); this.scene.add(base);
+      const base = new T.Mesh(new T.CylinderGeometry(4.5, 4.5, 6, 12), std('#e8c547')); base.position.set(x, 1, z); this.windG.add(base);
     }
   }
 
@@ -248,7 +285,7 @@ export class Decor {
       b.wl.rotation.z = f; b.wr.rotation.z = -f;
     }
     // dauphins : ils viennent sauter à l'étrave de temps en temps
-    if (this.dolActive > 0) this.dolActive -= dt; else { this.dolTimer -= dt; if (this.dolTimer <= 0 && me.v > 4) { this.dolActive = 16; this.dolTimer = 45 + Math.random() * 50; } }
+    if (this.dolActive > 0) this.dolActive -= dt; else { this.dolTimer -= dt; if (this.dolTimer <= 0 && me.v > 4 && this.venue?.decor.dolphins) { this.dolActive = 16; this.dolTimer = 45 + Math.random() * 50; } }
     const fx = Math.sin(me.h), fz = -Math.cos(me.h);
     for (const d of this.dolphins) {
       d.g.visible = this.dolActive > 0;

@@ -36,6 +36,9 @@
       </div>
       <div id="pSolo">
         <div class="row">
+          <label class="field">Plan d'eau
+            <select id="venue"></select>
+          </label>
           <label class="field">Parcours
             <select id="course"></select>
           </label>
@@ -43,7 +46,7 @@
         <p class="note" id="courseDesc"></p>
         <div class="row">
           <label class="field">Météo
-            <select id="met"><option value="0">Petit temps · 8 nds</option><option value="1" selected>Medium · 14 nds</option><option value="2">Brise · 20 nds</option><option value="3">Gros temps · 27 nds</option></select>
+            <select id="met"><option value="0">Petit temps · 8 nds</option><option value="1" selected>Medium · 14 nds</option><option value="2">Brise · 20 nds</option><option value="3">Gros temps · 27 nds</option><option value="4">Variable · grains</option></select>
           </label>
           <label class="field">Adversaires
             <select id="nBots"><option>0</option><option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option></select>
@@ -55,6 +58,9 @@
         <div class="row">
           <label class="field">Assistance
             <select id="assist"></select>
+          </label>
+          <label class="field">Ciel
+            <select id="sky"><option value="auto">Selon la météo</option><option value="soleil">Grand soleil</option><option value="nuageux">Nuageux</option><option value="pluie">Pluie</option><option value="brume">Brume</option><option value="couchant">Coucher de soleil</option></select>
           </label>
           <label class="field">Rythme
             <select id="pace"><option value="3" selected>Arcade (rapide)</option><option value="2">Dynamique</option><option value="1">Réaliste (temps réel)</option></select>

@@ -2,7 +2,7 @@
 import './style.css';
 import { fmt, ord } from './util/math';
 import { Game, PRE, STEP, TIME_SCALES, type Command } from './game/game';
-import { COURSES } from './game/course';
+import { VENUES, activateVenue } from './game/venue';
 import { ASSISTS } from './game/assist';
 import { Canvas2D, ZOOMS } from './render/canvas2d';
 import { Scene3D } from './render/scene3d';
@@ -27,14 +27,26 @@ new ResizeObserver(fit).observe(c2d.cv);
 
 // ---------- menus ----------
 const sel = (id: string) => $<HTMLSelectElement>(id);
-sel('course').innerHTML = COURSES.map(c => `<option value="${c.id}">${c.name} · ${c.nm.toFixed(1).replace('.', ',')} milles</option>`).join('');
+sel('venue').innerHTML = VENUES.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+const fillCourses = () => {
+  const { courses } = activateVenue(sel('venue').value), cur = sel('course').value;
+  sel('course').innerHTML = courses.map(c => `<option value="${c.id}">${c.name} · ${c.nm.toFixed(1).replace('.', ',')} milles</option>`).join('');
+  if (courses.some(c => c.id === cur)) sel('course').value = cur;
+};
 sel('assist').innerHTML = Object.entries(ASSISTS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
 const prefs = (() => { try { return JSON.parse(localStorage.getItem('regate-prefs') || '{}'); } catch { return {}; } })();
-for (const k of ['course', 'met', 'nBots', 'lvl', 'assist', 'pace']) if (prefs[k] != null) sel(k).value = prefs[k];
+if (prefs.venue) sel('venue').value = prefs.venue;
+fillCourses();
+for (const k of ['course', 'met', 'nBots', 'lvl', 'assist', 'pace', 'sky']) if (prefs[k] != null) sel(k).value = prefs[k];
 if (!prefs.assist) sel('assist').value = 'debutant';
 if (!prefs.course) sel('course').value = 'sprint';
-const descCourse = () => { const c = COURSES.find(x => x.id === sel('course').value)!; $('courseDesc').textContent = c.desc + (bests[c.id] ? ' Ton record : ' + fmt(bests[c.id]) + '.' : ''); };
-sel('course').addEventListener('change', descCourse); descCourse();
+const descCourse = () => {
+  const { venue, courses } = activateVenue(sel('venue').value), c = courses.find(x => x.id === sel('course').value) ?? courses[0], key = venue.id + ':' + c.id;
+  $('courseDesc').textContent = venue.desc + ' ' + c.desc + (bests[key] ? ' Ton record : ' + fmt(bests[key]) + '.' : '');
+};
+sel('course').addEventListener('change', descCourse);
+sel('venue').addEventListener('change', () => { fillCourses(); descCourse(); });
+descCourse();
 
 // ---------- partie ----------
 function start(g: Game): void {
@@ -46,14 +58,14 @@ function start(g: Game): void {
   c2d.resetCam(g.me.x, g.me.y - 80); acc = 0; paused = false;
 }
 function demo(): void {
-  const c = COURSES[Math.floor(Math.random() * 3)].id;
-  start(new Game({ mode: 'solo', demo: true, bots: 4, lvl: 2, course: c, startT: 20 }));
+  const v = VENUES[Math.floor(Math.random() * VENUES.length)], { courses } = activateVenue(v.id);
+  start(new Game({ mode: 'solo', demo: true, bots: 4, lvl: 2, venue: v.id, course: courses[0].id, startT: 20 }));
 }
 function startSolo(): void {
   unlockAudio();
-  const p = { course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value, pace: sel('pace').value };
+  const p = { venue: sel('venue').value, sky: sel('sky').value, course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value, pace: sel('pace').value };
   try { localStorage.setItem('regate-prefs', JSON.stringify(p)); } catch { /* */ }
-  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, course: p.course, assist: ASSISTS[p.assist].a, pace: +p.pace }));
+  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, venue: p.venue, sky: p.sky, course: p.course, assist: ASSISTS[p.assist].a, pace: +p.pace }));
   $('ovStart').hidden = true; $('ovEnd').hidden = true; $('resumeBtn').hidden = true;
 }
 function menu(): void {
@@ -70,7 +82,7 @@ function finishMe(): void {
   setTimeout(() => { if (!app.g || app.g !== g || g.demo || g.me.fin == null) return; showEnd(g); }, 1500);
 }
 function showEnd(g: Game): void {
-  const t = g.me.fin!, st = g.standings(), pos = st.findIndex(e => e.me) + 1, id = g.course.id;
+  const t = g.me.fin!, st = g.standings(), pos = st.findIndex(e => e.me) + 1, id = g.venue.id + ':' + g.course.id;
   $('endTitle').textContent = pos === 1 && st.length > 1 ? 'Victoire !' : 'Arrivée !';
   $('endTime').textContent = fmt(t);
   let line = (st.length > 1 ? ord(pos) + ' sur ' + st.length + '. ' : '') + g.course.name + '. ';

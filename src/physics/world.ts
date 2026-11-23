@@ -1,15 +1,13 @@
 // Plan d'eau : îles (décor, échouage, obstacles pour l'IA). Coordonnées en mètres, nord = -y.
-export interface Island { name: string; x: number; y: number; r: number; h: number; seed: number; lighthouse?: boolean }
+export interface Island {
+  name: string; x: number; y: number; r: number; h: number; seed: number; lighthouse?: boolean;
+  /** Décor : nombre de maisons du village, clocher, port. */
+  village?: number; church?: boolean; harbour?: boolean;
+}
 
-export const ISLANDS: readonly Island[] = [
-  { name: 'Île Verte', x: -4200, y: -7500, r: 900, h: 70, seed: 1.3 },
-  { name: 'Île du Phare', x: 3500, y: -11000, r: 700, h: 55, seed: 2.7, lighthouse: true },
-  { name: 'Rocher du Nord', x: -2000, y: -37000, r: 450, h: 35, seed: 4.1, lighthouse: true },
-  { name: 'Les Moines', x: 5200, y: -2500, r: 380, h: 25, seed: 5.9 },
-  { name: 'Île Longue', x: -6500, y: 1500, r: 1300, h: 90, seed: 7.2 },
-  { name: 'Île aux Oiseaux', x: 7000, y: -17000, r: 1000, h: 80, seed: 8.8 },
-  { name: 'Grand Banc', x: -7500, y: -22000, r: 1500, h: 110, seed: 3.3 },
-];
+/** Îles du plan d'eau courant (changent avec le plan d'eau : voir game/venue.ts). */
+export let ISLANDS: Island[] = [];
+export function setIslands(list: Island[]): void { ISLANDS = list; }
 
 /** Rayon du rivage (m) dans la direction th (rad) : contour irrégulier, partagé par la physique et le rendu. */
 export function shoreR(isl: Island, th: number): number {

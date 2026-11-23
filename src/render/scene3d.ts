@@ -61,6 +61,14 @@ export class Scene3D {
   private arcKey = '';
   private arcPts: { x: number; z: number; h: number }[] = [];
   private projV = new T.Vector3();
+  // ciel, météo, plan d'eau
+  private FOG!: T.Color; private skyTop = new T.Color('#2569ad');
+  private hemi!: T.HemisphereLight; private amb!: T.AmbientLight;
+  private envScene!: T.Scene;
+  private clouds: { sp: T.Sprite; op: number }[] = [];
+  private islG = new T.Group(); private venueId = ''; private skyId = '';
+  private sky = { near: 2500, far: 14000, sun: 0.9, hemi: 0.75, rain: 0 };
+  private rain!: T.LineSegments; private rainPos!: Float32Array; private rainAmt = 0;
   private decor!: Decor;
   private arrow!: T.Mesh<T.ShapeGeometry, T.MeshBasicMaterial>;
   private drops: Drop[] = [];
@@ -82,14 +90,15 @@ export class Scene3D {
     scene.fog = new T.Fog(FOG, 2500, 14000);
     const sunDir = new T.Vector3(-0.45, 0.42, -0.78).normalize();
 
+    this.FOG = FOG;
     scene.add(new T.Mesh(new T.SphereGeometry(20000, 32, 16), new T.ShaderMaterial({
       side: T.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: new T.Color('#2569ad') }, hor: { value: FOG }, sun: { value: sunDir } },
+      uniforms: { top: { value: this.skyTop }, hor: { value: FOG }, sun: { value: sunDir } },
       vertexShader: 'varying vec3 vP;void main(){vP=normalize(position);vec4 p=modelViewMatrix*vec4(position,1.);gl_Position=projectionMatrix*p;gl_Position.z=gl_Position.w*.99999;}',
       fragmentShader: 'uniform vec3 top,hor,sun;varying vec3 vP;void main(){float h=clamp(vP.y*1.8,0.,1.);vec3 c=mix(hor,top,pow(h,.5));float s=max(dot(vP,sun),0.);c+=vec3(1.,.88,.65)*(pow(s,900.)*3.+pow(s,10.)*.22);gl_FragColor=vec4(c,1.);}',
     })));
-    scene.add(new T.HemisphereLight('#e4f3ff', '#1d5a7a', 0.75 * Math.PI));
-    scene.add(new T.AmbientLight('#ffffff', 0.25 * Math.PI));
+    this.hemi = new T.HemisphereLight('#e4f3ff', '#1d5a7a', 0.75 * Math.PI); scene.add(this.hemi);
+    this.amb = new T.AmbientLight('#ffffff', 0.25 * Math.PI); scene.add(this.amb);
     const sl = new T.DirectionalLight('#fff1d6', 0.9 * Math.PI); sl.position.copy(sunDir).multiplyScalar(100); scene.add(sl); scene.add(sl.target);
     this.sun = sl; this.sunDir = sunDir;
     if (this.shadows) {
@@ -100,9 +109,9 @@ export class Scene3D {
     }
 
     {
-      const envScene = new T.Scene();
+      const envScene = new T.Scene(); this.envScene = envScene;
       envScene.add(new T.Mesh(new T.SphereGeometry(100, 32, 16), new T.ShaderMaterial({
-        side: T.BackSide, uniforms: { top: { value: new T.Color('#2569ad') }, hor: { value: FOG }, sun: { value: sunDir } },
+        side: T.BackSide, uniforms: { top: { value: this.skyTop }, hor: { value: FOG }, sun: { value: sunDir } },
         vertexShader: 'varying vec3 vP;void main(){vP=normalize(position);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
         fragmentShader: 'uniform vec3 top,hor,sun;varying vec3 vP;void main(){float h=clamp(vP.y*1.8,0.,1.);vec3 c=vP.y<0.?vec3(.03,.16,.25):mix(hor,top,pow(h,.5));float s=max(dot(vP,sun),0.);c+=vec3(1.,.9,.7)*(pow(s,300.)*6.+pow(s,8.)*.3);gl_FragColor=vec4(c,1.);}',
       })));
@@ -124,6 +133,7 @@ export class Scene3D {
       const an = Math.random() * TAU, d = 5000 + Math.random() * 11000;
       sp.position.set(Math.cos(an) * d, 600 + Math.random() * 1600, Math.sin(an) * d - 10000);
       const w = 1500 + Math.random() * 2800; sp.scale.set(w, w * 0.32, 1); scene.add(sp);
+      this.clouds.push({ sp, op: sp.material.opacity });
     }
 
     // mer : grille radiale (dense près de la caméra, jusqu'à 12 km)
@@ -135,26 +145,26 @@ export class Scene3D {
       const Q = st / (k * A), w = Math.sqrt(9.8 * k);
       return `{float ph=${f(k)}*dot(vec2(${f(dx)},${f(dz)}),p0)-t*${f(w)};float c=cos(ph),s=sin(ph);P.x+=a*${f(Q * A * dx)}*c;P.z+=a*${f(Q * A * dz)}*c;P.y+=a*${f(A)}*s;N.x-=a*${f(dx * k * A)}*c;N.z-=a*${f(dz * k * A)}*c;N.y-=a*${f(st)}*s;J-=a*${f(st)}*s;}`;
     }).join('');
-    this.wU = { amp: { value: 1 }, t: { value: 0 }, off: { value: new T.Vector2() }, sun: { value: sunDir }, gT: { value: this.gTex }, gC: { value: new T.Vector2() }, gS: { value: this.gS }, fogC: { value: FOG }, isl: { value: ISLANDS.map(i => new T.Vector4(i.x, i.y, i.r, i.seed)) } };
+    this.wU = { amp: { value: 1 }, t: { value: 0 }, off: { value: new T.Vector2() }, sun: { value: sunDir }, gT: { value: this.gTex }, gC: { value: new T.Vector2() }, gS: { value: this.gS }, fogC: { value: FOG }, isl: { value: Array.from({ length: 16 }, () => new T.Vector4(1e7, 1e7, 1, 0)) }, nIsl: { value: 0 }, deepC: { value: new T.Vector3(0.02, 0.17, 0.28) }, skyLo: { value: new T.Vector3(0.76, 0.86, 0.92) }, skyHi: { value: new T.Vector3(0.3, 0.53, 0.78) } };
     const water = new T.Mesh(this.radialGrid(150, 256, 12000), new T.ShaderMaterial({
       uniforms: this.wU,
       vertexShader: 'uniform float t,amp;uniform vec2 off;varying vec3 vW;varying vec3 vN;varying float vJ;void main(){vec2 p0=position.xz+off;float a=amp*(1.-smoothstep(900.,2600.,length(position.xz)));vec3 P=vec3(p0.x,0.,p0.y);vec3 N=vec3(0.,1.,0.);float J=1.;' + waves + 'vN=normalize(N);vJ=J;vW=P;gl_Position=projectionMatrix*viewMatrix*vec4(P,1.);}',
-      fragmentShader: `uniform vec3 sun,fogC;uniform float t,gS;uniform sampler2D gT;uniform vec2 gC;uniform vec4 isl[${ISLANDS.length}];varying vec3 vW,vN;varying float vJ;
+      fragmentShader: `uniform vec3 sun,fogC;uniform float t,gS;uniform sampler2D gT;uniform vec2 gC;uniform vec4 isl[16];uniform int nIsl;uniform vec3 deepC,skyLo,skyHi;varying vec3 vW,vN;varying float vJ;
 float hs(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float vn(vec2 p){vec2 i=floor(p),q=fract(p);q=q*q*(3.-2.*q);return mix(mix(hs(i),hs(i+vec2(1.,0.)),q.x),mix(hs(i+vec2(0.,1.)),hs(i+vec2(1.,1.)),q.x),q.y);}
 void main(){float d=length(cameraPosition.xz-vW.xz);float fd=1.-smoothstep(40.,500.,d);
 vec2 uv=(vW.xz-gC)/gS+.5;float g=texture2D(gT,uv).r*(1.-smoothstep(1500.,2000.,d));float r=(1.+g*2.)*fd;
 vec3 n=normalize(vN+r*vec3(sin(vW.x*1.7+t*2.1)*.03+sin(vW.z*3.1-vW.x*.7-t*2.9)*.022+(vn(vW.xz*1.3+t*.6)-.5)*.07,0.,cos(vW.z*1.9+t*1.6)*.03+sin(vW.x*2.7+vW.z*1.3+t*3.3)*.018+(vn(vW.zx*1.1-t*.5)-.5)*.07));
 vec3 V=normalize(cameraPosition-vW);float fr=.02+.98*pow(1.-max(dot(n,V),0.),5.);
-vec3 R=reflect(-V,n);float sk=clamp(R.y,0.,1.);vec3 skyc=mix(vec3(.76,.86,.92),vec3(.3,.53,.78),pow(sk,.5));
-vec3 deep=mix(vec3(.02,.17,.28),vec3(.01,.09,.17),g*.8);
+vec3 R=reflect(-V,n);float sk=clamp(R.y,0.,1.);vec3 skyc=mix(skyLo,skyHi,pow(sk,.5));
+vec3 deep=mix(deepC,deepC*.55,g*.8);
 float sss=clamp(vW.y*1.3,0.,1.)*(dot(V,-sun)*.5+.5);deep+=vec3(0.,.22,.2)*sss*.6;
 vec3 c=mix(deep,skyc,fr*.9);vec3 H=normalize(sun+V);c+=vec3(1.,.93,.8)*pow(max(dot(n,H),0.),500.)*1.8;
 float fn=vn(vW.xz*.9+t*.3)*.6+vn(vW.xz*3.1-t*.2)*.4;
 float foam=smoothstep(.55,.3,vJ)*(.45+g)*smoothstep(.4,.75,fn);
 foam+=g*smoothstep(.74,.9,vn(vW.xz*.22+vec2(t*.05,-t*.35)))*smoothstep(.45,.8,fn)*.9;
 c=mix(c,vec3(.93,.96,.98),clamp(foam,0.,1.)*mix(.2,1.,fd));
-float sh=1e9;for(int i=0;i<${ISLANDS.length};i++){vec4 I=isl[i];vec2 q=vW.xz-I.xy;float th=atan(q.y,q.x),s=I.w;float R=I.z*(1.+.12*sin(3.*th+s)+.07*sin(5.*th+2.*s)+.04*sin(9.*th+3.*s));sh=min(sh,length(q)-R*1.04);}
+float sh=1e9;for(int i=0;i<16;i++){if(i>=nIsl)break;vec4 I=isl[i];vec2 q=vW.xz-I.xy;float th=atan(q.y,q.x),s=I.w;float R=I.z*(1.+.12*sin(3.*th+s)+.07*sin(5.*th+2.*s)+.04*sin(9.*th+3.*s));sh=min(sh,length(q)-R*1.04);}
 float shallow=smoothstep(450.,0.,sh);c=mix(c,mix(vec3(.05,.42,.45),vec3(.35,.75,.7),smoothstep(150.,0.,sh)),shallow*.55*(1.-fr*.6));
 c=mix(c,vec3(.95,.97,.98),smoothstep(90.,0.,sh)*smoothstep(.35,.7,vn(vW.xz*.15+vec2(t*.3,0.))+.3*sin(sh*.15-t*1.5))*.8);
 c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
@@ -162,7 +172,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     water.frustumCulled = false; scene.add(water);
 
     // îles
-    ISLANDS.forEach(isl => this.scene.add(this.mkIsland(isl)));
+    scene.add(this.islG);
 
     // bouée de la ligne, bateau comité, ligne
     this.pin3 = this.mkBuoy('#ffc93c', 1.6); scene.add(this.pin3);
@@ -223,6 +233,13 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
         this.drops.push({ x, y, z, vx: Math.cos(a) * sp, vy: 2 + Math.random() * 3, vz: Math.sin(a) * sp, a: 0 });
       }
     });
+    {
+      const N = 1500; this.rainPos = new Float32Array(N * 6);
+      for (let i = 0; i < N; i++) { const x = (Math.random() - 0.5) * 120, y = Math.random() * 60, z = (Math.random() - 0.5) * 120; this.rainPos.set([x, y, z, x, y - 1.2, z], i * 6); }
+      const rg = new T.BufferGeometry(); rg.setAttribute('position', new T.BufferAttribute(this.rainPos, 3));
+      this.rain = new T.LineSegments(rg, new T.LineBasicMaterial({ color: '#c9d6df', transparent: true, opacity: 0.45, fog: false }));
+      this.rain.frustumCulled = false; this.rain.visible = false; scene.add(this.rain);
+    }
     let drag: { x: number; y: number } | null = null;
     canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; try { canvas.setPointerCapture(e.pointerId); } catch { /* */ } });
     canvas.addEventListener('pointermove', e => {
@@ -605,7 +622,9 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
   }
 
   render(g: Game, boats: Boat[], me: Boat, dt: number, rt: number, view: 'pov' | 'chase'): void {
-    this.rt = rt; this.amp = g.met.amp;
+    this.rt = rt; this.amp = g.waveAmp;
+    if (g.venue.id !== this.venueId) this.setVenue(g);
+    if (g.sky !== this.skyId) this.setSky(g.sky);
     this.setCourse(g.course);
     const tm = rt, pov = view === 'pov' && !g.demo, cam = this.cam, look = this.look;
     for (const r of this.boats3.values()) r.used = false;
@@ -618,6 +637,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     });
     for (const r of this.boats3.values()) r.yaw.visible = r.used;
     this.decor.update(g, boats, me, dt, rt, this.amp);
+    this.updateWeather(g, dt);
     // sillage
     const wake = this.wake; let n = 0;
     for (const b of boats) for (const w of b.wake) {
@@ -698,6 +718,65 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     }
     this.sun.position.set(me.x + this.sunDir.x * 100, this.sunDir.y * 100, me.y + this.sunDir.z * 100); this.sun.target.position.set(me.x, 0, me.y);
     this.ren.render(this.scene, cam);
+  }
+
+  /** Plan d'eau : îles, eau, décor. */
+  private setVenue(g: Game): void {
+    this.venueId = g.venue.id;
+    for (const c of [...this.islG.children]) { this.islG.remove(c); c.traverse(o => { const m = o as T.Mesh; if (m.geometry) m.geometry.dispose(); }); }
+    ISLANDS.forEach(isl => this.islG.add(this.mkIsland(isl)));
+    const arr = this.wU.isl.value as T.Vector4[];
+    arr.forEach((v, i) => { const isl = ISLANDS[i]; if (isl) v.set(isl.x, isl.y, isl.r, isl.seed); else v.set(1e7, 1e7, 1, 0); });
+    this.wU.nIsl.value = Math.min(16, ISLANDS.length);
+    (this.wU.deepC.value as T.Vector3).set(...g.venue.water);
+    this.decor.setVenue(g.venue);
+    this.markGame = null; this.arcKey = '';
+  }
+
+  /** Ciel : couleurs, brume, soleil, nuages, reflets. */
+  private setSky(id: string): void {
+    this.skyId = id;
+    const P: Record<string, { top: string; hor: string; sun: number[]; sunCol: string; sunI: number; hemi: number; near: number; far: number; cloud: string; cloudOp: number; lo: number[]; hi: number[]; rain: number }> = {
+      soleil: { top: '#2569ad', hor: '#c6dbe8', sun: [-0.45, 0.42, -0.78], sunCol: '#fff1d6', sunI: 0.9, hemi: 0.75, near: 2500, far: 14000, cloud: '#ffffff', cloudOp: 1, lo: [0.76, 0.86, 0.92], hi: [0.3, 0.53, 0.78], rain: 0 },
+      nuageux: { top: '#56789a', hor: '#c3ced7', sun: [-0.45, 0.5, -0.78], sunCol: '#f2f0ea', sunI: 0.55, hemi: 0.85, near: 2000, far: 11000, cloud: '#e6eaee', cloudOp: 1.5, lo: [0.72, 0.78, 0.83], hi: [0.42, 0.52, 0.62], rain: 0 },
+      pluie: { top: '#47525c', hor: '#8e9aa4', sun: [-0.45, 0.6, -0.78], sunCol: '#d9dde0', sunI: 0.28, hemi: 0.8, near: 500, far: 5200, cloud: '#7d8892', cloudOp: 1.8, lo: [0.56, 0.61, 0.66], hi: [0.36, 0.41, 0.46], rain: 1 },
+      brume: { top: '#a3b5c1', hor: '#dbe2e6', sun: [-0.45, 0.45, -0.78], sunCol: '#f5f3ee', sunI: 0.45, hemi: 0.9, near: 120, far: 2300, cloud: '#ffffff', cloudOp: 0.3, lo: [0.82, 0.86, 0.88], hi: [0.7, 0.76, 0.8], rain: 0 },
+      couchant: { top: '#283a6e', hor: '#f2a463', sun: [-0.3, 0.07, -0.95], sunCol: '#ffae6b', sunI: 0.95, hemi: 0.5, near: 2200, far: 12500, cloud: '#ffc2a0', cloudOp: 1.2, lo: [0.98, 0.66, 0.45], hi: [0.42, 0.42, 0.62], rain: 0 },
+    };
+    const p = P[id] ?? P.soleil;
+    this.skyTop.set(p.top); this.FOG.set(p.hor); (this.scene.fog as T.Fog).color.set(p.hor);
+    this.sunDir.set(p.sun[0], p.sun[1], p.sun[2]).normalize();
+    this.sun.color.set(p.sunCol);
+    this.sky = { near: p.near, far: p.far, sun: p.sunI, hemi: p.hemi, rain: p.rain };
+    this.hemi.color.set(id === 'couchant' ? '#ffd2b0' : '#e4f3ff');
+    for (const c of this.clouds) { (c.sp.material as T.SpriteMaterial).color.set(p.cloud); c.sp.material.opacity = Math.min(1, c.op * p.cloudOp); }
+    (this.wU.skyLo.value as T.Vector3).set(p.lo[0], p.lo[1], p.lo[2]); (this.wU.skyHi.value as T.Vector3).set(p.hi[0], p.hi[1], p.hi[2]);
+    const pm = new T.PMREMGenerator(this.ren);
+    this.scene.environment?.dispose(); this.scene.environment = pm.fromScene(this.envScene, 0.02).texture; pm.dispose();
+  }
+
+  /** Pluie (ciel « pluie » ou grain qui passe) : traînées, brume plus dense, lumière plus terne. */
+  private updateWeather(g: Game, dt: number): void {
+    const cam = this.cam.position, sq = g.wind.squall(cam.x, cam.z, g.t);
+    const target = Math.max(this.sky.rain, sq);
+    this.rainAmt += (target - this.rainAmt) * Math.min(1, dt * 0.8);
+    const r = this.rainAmt, fog = this.scene.fog as T.Fog;
+    fog.near = this.sky.near * (1 - 0.75 * r); fog.far = this.sky.far * (1 - 0.6 * r);
+    this.sun.intensity = this.sky.sun * Math.PI * (1 - 0.6 * r);
+    this.hemi.intensity = this.sky.hemi * Math.PI * (1 - 0.2 * r);
+    this.rain.visible = r > 0.05;
+    if (this.rain.visible) {
+      const P = this.rainPos, n = P.length / 6, wx = -Math.sin(g.wd) * 0.35, wz = Math.cos(g.wd) * 0.35, fall = 28 * dt;
+      for (let i = 0; i < n; i++) {
+        const o = i * 6; let x = P[o], y = P[o + 1], z = P[o + 2];
+        y -= fall; x += wx * fall; z += wz * fall;
+        if (y < 0 || Math.abs(x) > 60 || Math.abs(z) > 60) { x = (Math.random() - 0.5) * 120; y = 40 + Math.random() * 20; z = (Math.random() - 0.5) * 120; }
+        P[o] = x; P[o + 1] = y; P[o + 2] = z; P[o + 3] = x - wx * 1.5; P[o + 4] = y + 1.6; P[o + 5] = z - wz * 1.5;
+      }
+      this.rain.position.set(cam.x, cam.y - 25, cam.z);
+      this.rain.geometry.attributes.position.needsUpdate = true;
+      (this.rain.material as T.LineBasicMaterial).opacity = 0.2 + 0.4 * r;
+    }
   }
 
   /** Repères visuels de la prochaine marque (et drapeaux qui flottent). */

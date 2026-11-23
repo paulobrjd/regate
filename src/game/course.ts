@@ -34,7 +34,8 @@ const unit = (x: number, y: number): Pt => { const d = Math.hypot(x, y) || 1; re
 const right = (d: Pt): Pt => ({ x: -d.y, y: d.x });
 const left = (d: Pt): Pt => ({ x: d.y, y: -d.x });
 
-function build(id: string, name: string, desc: string, defs: MarkDef[]): Course {
+/** Construit un parcours (les îles du plan d'eau doivent être actives). */
+export function build(id: string, name: string, desc: string, defs: MarkDef[]): Course {
   const marks: Mark[] = [];
   const pts: Pt[] = [{ x: 0, y: 0 }, ...defs, { x: 0, y: 0 }];
   let len = 0;
@@ -61,31 +62,7 @@ function build(id: string, name: string, desc: string, defs: MarkDef[]): Course 
   return { id, name, desc, nm: Math.round(len / 1852 * 10) / 10, marks, pin: PIN, cmte: CMTE };
 }
 
-export const COURSES: readonly Course[] = [
-  build('sprint', 'Sprint', 'Un mille au près, demi-tour, retour à fond au portant. Court et intense.', [
-    { x: 0, y: -950, name: 'Bouée au vent', side: 'port' },
-  ]),
-  build('banane', 'Banane courte', 'Un bord de près jusqu\'à la bouée au vent, puis retour au portant.', [
-    { x: 0, y: -1850, name: 'Bouée au vent', side: 'port' },
-  ]),
-  build('triangle', 'Triangle', 'Près, travers, largue : le parcours olympique.', [
-    { x: 0, y: -3000, name: 'Bouée 1 (au vent)', side: 'port' },
-    { x: -2300, y: -1600, name: 'Bouée 2 (dégagement)', side: 'port' },
-    { x: 0, y: -450, name: 'Bouée 3 (sous le vent)', side: 'port' },
-  ]),
-  build('banane2', 'Banane deux tours', 'Deux allers-retours entre la bouée au vent et la bouée sous le vent.', [
-    { x: 0, y: -2600, name: 'Bouée au vent', side: 'port' },
-    { x: 0, y: -380, name: 'Bouée sous le vent', side: 'port' },
-    { x: 0, y: -2600, name: 'Bouée au vent (2e tour)', side: 'port' },
-  ]),
-  build('iles', 'Tour des îles', 'Côtier : laisse l\'Île Verte puis l\'Île du Phare à tribord.', [
-    { x: ISLANDS[0].x, y: ISLANDS[0].y, name: 'Île Verte', side: 'stbd', island: 0 },
-    { x: ISLANDS[1].x, y: ISLANDS[1].y, name: 'Île du Phare', side: 'stbd', island: 1 },
-  ]),
-  build('large', 'Raid du Rocher du Nord', 'Grand large : remonte au Rocher du Nord, laisse-le à tribord et redescends.', [
-    { x: ISLANDS[2].x, y: ISLANDS[2].y, name: 'Rocher du Nord', side: 'stbd', island: 2 },
-  ]),
-];
+export type CourseDef = [id: string, name: string, desc: string, marks: MarkDef[]];
 
 /** Le segment p→q coupe-t-il la demi-droite de contrôle de la bouée ? */
 export function crossesRay(m: Mark, p: Pt, q: Pt): boolean {

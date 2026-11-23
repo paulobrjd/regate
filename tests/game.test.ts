@@ -1,16 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { Game, STEP } from '../src/game/game';
 import { NO_INPUT } from '../src/physics/boat';
-import { COURSES, courseClear } from '../src/game/course';
+import { courseClear } from '../src/game/course';
+import { VENUES, activateVenue } from '../src/game/venue';
 
 const run = (g: Game, s: number) => { for (let i = 0; i < s / STEP && !g.boats.every(b => b.fin != null); i++) g.update(STEP, NO_INPUT); };
 
 describe('parcours', () => {
   it('aucun bord ne traverse une île', () => {
-    for (const c of COURSES) expect(courseClear(c)).toEqual([]);
+    for (const v of VENUES) for (const c of activateVenue(v.id).courses) expect(courseClear(c), v.id).toEqual([]);
   });
   it('les longueurs vont du court au grand large', () => {
-    const nm = COURSES.map(c => c.nm);
+    const nm = VENUES.flatMap(v => activateVenue(v.id).courses.map(c => c.nm));
     expect(Math.min(...nm)).toBeLessThan(3);
     expect(Math.max(...nm)).toBeGreaterThan(35);
   });
