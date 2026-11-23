@@ -82,6 +82,14 @@ body.auto-sheets [data-need=sheets],body.auto-systems [data-need=systems],body.a
 .cmds kbd{font:600 12px Barlow,sans-serif;color:var(--muted);display:block}
 .cmds button.on kbd{color:#fff}
 .pad{grid-template-columns:repeat(2,minmax(110px,auto))}
+.fsbtn{position:absolute;left:12px;top:150px;z-index:2;background:rgba(4,30,50,.62);color:#fff;border:0;padding:4px 12px;min-height:36px;font-size:14px}
+.fsbtn:hover{background:rgba(4,30,50,.85)}
+.gbtns{display:none;position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:2;gap:8px}
+.gbtns button{background:rgba(4,30,50,.7);color:#fff;border:0;min-height:52px;padding:0 16px;font-size:16px;user-select:none;-webkit-user-select:none;touch-action:none}
+.gbtns .steer{min-width:64px;font-size:22px}.gbtns button.on{background:var(--buoy)}
+.game:fullscreen,.game.pseudo-fs{position:fixed;inset:0;width:100vw;height:100vh;height:100dvh;border-radius:0;z-index:1000}
+.game:fullscreen .gbtns,.game.pseudo-fs .gbtns{display:flex}
+body.fs-open{overflow:hidden}
 .pad .route{background:var(--buoy);color:#fff;border-color:var(--buoy)}.pad .route kbd{color:#fff}.pad button.route.on{filter:brightness(.85)}
 details.keys{flex:1 1 100%}
 details.keys summary{cursor:pointer;font-weight:600;color:var(--ink);margin-bottom:8px}

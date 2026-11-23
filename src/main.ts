@@ -108,6 +108,24 @@ function timeScale(d: number): void {
   g.timeScale = TIME_SCALES[i]; g.say(g.timeScale > 1 ? 'Temps accéléré ×' + g.timeScale : 'Vitesse normale');
 }
 $('viewBtn').addEventListener('click', nextView);
+$('viewBtn2').addEventListener('click', nextView);
+// plein écran : API du navigateur, sinon le jeu occupe toute la fenêtre
+function setFsLabel(): void {
+  const on = !!document.fullscreenElement || $('game').classList.contains('pseudo-fs');
+  $('fsBtn').textContent = on ? '✕ Quitter le plein écran' : '⛶ Plein écran';
+  document.body.classList.toggle('fs-open', on);
+  setTimeout(fit, 50);
+}
+function toggleFs(): void {
+  const el = $('game');
+  if (document.fullscreenElement) { void document.exitFullscreen().catch(() => {}); return; }
+  if (el.classList.contains('pseudo-fs')) { el.classList.remove('pseudo-fs'); setFsLabel(); return; }
+  const req = el.requestFullscreen?.bind(el);
+  if (req) req().catch(() => { el.classList.add('pseudo-fs'); setFsLabel(); });
+  else { el.classList.add('pseudo-fs'); setFsLabel(); }
+}
+$('fsBtn').addEventListener('click', toggleFs);
+document.addEventListener('fullscreenchange', setFsLabel);
 $('zoomBtn').addEventListener('click', () => zoom(c2d.zoomI >= ZOOMS.length - 1 ? -ZOOMS.length : 1));
 $('timeBtn').addEventListener('click', () => timeScale(app.g && app.g.timeScale >= 50 ? -9 : 1));
 $('sndBtn').addEventListener('click', () => { unlockAudio(); setSnd(!app.soundOn); });
@@ -144,7 +162,7 @@ function steer(dir: number, big: boolean): boolean {
 addEventListener('keydown', e => {
   if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') return;
   const key = e.key.toLowerCase();
-  if (e.code === 'Escape') { if (playing()) menu(); else if (paused) resume(); return; }
+  if (e.code === 'Escape') { if ($('game').classList.contains('pseudo-fs')) { toggleFs(); return; } if (playing()) menu(); else if (paused) resume(); return; }
   if (e.code === 'KeyC' && !e.repeat) { nextView(); return; }
   if (key === 'm' && !e.repeat) { unlockAudio(); setSnd(!app.soundOn); return; }
   if (key === 'h' && !e.repeat) { const d = $<HTMLDetailsElement>('help'); d.open = !d.open; return; }
@@ -219,7 +237,7 @@ function pointerSteer(e: PointerEvent): boolean {
 }
 let ringDrag = false;
 $('game').addEventListener('pointerdown', e => {
-  if ((e.target as HTMLElement).closest('.ov')) return;
+  if ((e.target as HTMLElement).closest('.ov, button')) return;
   if (pointerSteer(e)) { ringDrag = true; e.preventDefault(); e.stopPropagation(); }
 }, { capture: true });
 $('game').addEventListener('pointermove', e => { if (ringDrag) { pointerSteer(e); e.stopPropagation(); } }, { capture: true });
