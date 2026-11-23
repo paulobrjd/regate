@@ -10,7 +10,7 @@ import {
   mkBoat, stepBoat, cmdHead, cmdReef, cmdKeel, cmdFoils, cmdBallast, cmdPilot, cmdPilotMode, cmdPilotTack, cmdPilotAdjust,
   config, NO_INPUT, type Boat, type BoatEvent, type StepEnv, type Obstacle, type BoatInput,
 } from '../physics/boat';
-import { LEVELS, mkAI, aiSteer } from '../ai/bot';
+import { LEVELS, mkAI, aiSteer, type AI } from '../ai/bot';
 import { vmgAngles } from '../physics/polar';
 import { norm } from '../util/math';
 import { applyAssist, newMem, ASSISTS, type Assist, type AssistMem } from './assist';
@@ -28,7 +28,7 @@ export const BOTS = ['Margot', 'Yann', 'Loïc', 'Armelle', 'Tanguy'];
 export type Sfx = 'tick' | 'gun' | 'finish' | 'capsize' | 'gybeWild' | 'mark' | 'winch' | 'ground';
 
 export type Command = 'head1' | 'head2' | 'head3' | 'head4' | 'head5' | 'reefIn' | 'reefOut' | 'keel' | 'foils' | 'ballast'
-  | 'pilot' | 'pilotMode' | 'pilotTack' | 'pilotLeft' | 'pilotRight' | 'pilotLeft10' | 'pilotRight10';
+  | 'pilot' | 'pilotMode' | 'pilotTack' | 'pilotLeft' | 'pilotRight' | 'pilotLeft10' | 'pilotRight10' | 'route';
 
 export interface GameOpts {
   mode: 'solo' | 'net';
@@ -78,6 +78,14 @@ export class Game {
   private env: StepEnv;
   private meMem: AssistMem = newMem();
   private pinch = 0;
+  /** Cap conseillé (rad) par un « fantôme » qui navigue comme un champion, et son explication. */
+  advice: number | null = null;
+  adviceTxt = '';
+  /** Route automatique : le bateau suit tout seul le cap conseillé. */
+  routeAuto = false;
+  private ghost: AI | null = null;
+  private adviceT = 0;
+  private ghostTack = 0;
   private obstacles: Obstacle[];
 
   constructor(o: GameOpts) {
@@ -182,11 +190,12 @@ export class Game {
       case 'ballast': cmdBallast(b); this.say(b.ballPT + b.ballST > 0 ? 'Ballast au vent : pompe en route' : 'On vide les ballasts'); break;
       case 'pilot': cmdPilot(b, this.wd); this.say(b.pilot.on ? 'Pilote engagé' : 'Pilote débrayé : à toi la barre'); break;
       case 'pilotMode': cmdPilotMode(b, this.wd); this.say('Pilote : mode ' + (b.pilot.mode === 'cap' ? 'cap compas' : 'angle au vent')); break;
-      case 'pilotTack': cmdPilotTack(b, this.wd); this.say(Math.abs(b.twa) < 90 * D ? 'Virement de bord au pilote' : 'Empannage au pilote'); break;
+      case 'pilotTack': this.routeAuto = false; cmdPilotTack(b, this.wd); this.say(Math.abs(b.twa) < 90 * D ? 'Virement de bord au pilote' : 'Empannage au pilote'); break;
       case 'pilotLeft': cmdPilotAdjust(b, -1); break;
       case 'pilotRight': cmdPilotAdjust(b, 1); break;
       case 'pilotLeft10': cmdPilotAdjust(b, -10); break;
       case 'pilotRight10': cmdPilotAdjust(b, 10); break;
+      case 'route': this.routeAuto = !this.routeAuto; this.say(this.routeAuto ? 'Route auto : le bateau suit la flèche verte' : 'Route auto coupée : à toi la barre'); break;
     }
   }
 
@@ -209,7 +218,12 @@ export class Game {
         aiSteer(b, this.course, t, this.wd);
         applyAssist(b, { sheets: true, systems: true, sails: true }, this.cal, b.ai.mem, this.simT, dt, b.ai.err);
       } else if (b.fin == null) {
-        inp = this.assist.helm ? this.assistedHelm(b, input, dt) : input;
+        if (b === this.me && !this.demo) this.updateAdvice(b, dt);
+        if (this.routeAuto && this.advice != null) {
+          if (input.helm) { this.routeAuto = false; this.say('Route auto coupée : à toi la barre'); }
+          else { b.pilot.on = true; b.pilot.mode = 'cap'; b.pilot.set = this.advice; }
+        }
+        inp = this.routeAuto ? { ...input, helm: 0 } : this.assist.helm ? this.assistedHelm(b, input, dt) : input;
         b.safe = !!this.assist.safe;
         applyAssist(b, this.assist, this.cal, this.meMem, this.simT, dt);
         if (this.assist.sails) b.energy = 1; // manœuvres automatiques : le skipper ne s'épuise pas
@@ -223,6 +237,37 @@ export class Game {
     this.autoSlow();
     if (this.demo && (this.boats.every(b => b.fin != null) || t > 1500)) this.over = true;
     if (this.msgT > 0) this.msgT -= dt;
+  }
+
+  /** Le fantôme calcule le meilleur cap à partir de la position du joueur (4 fois par seconde). */
+  private updateAdvice(b: Boat, dt: number): void {
+    this.adviceT -= dt;
+    if (this.adviceT > 0 && this.advice != null) return;
+    this.adviceT = 0.25;
+    if (!this.ghost) { this.ghost = mkAI(LEVELS[2], b.x, makeRng(99), newMem()); this.ghost.corr = 22; this.ghost.early = 1; }
+    const A = this.ghost;
+    // si le joueur a viré de lui-même, le fantôme accepte son choix
+    if (b.tack !== this.ghostTack) { this.ghostTack = b.tack; if (!this.routeAuto) { A.k = b.tack; A.lastTack = this.t; } }
+    const ghost = { ...b, pilot: { ...b.pilot }, ai: A };
+    aiSteer(ghost, this.course, this.t, this.wd);
+    const h = ghost.pilot.set;
+    this.advice = h;
+    const twaA = norm(h - this.wd), d = norm(h - b.h) / D;
+    if (Math.sign(twaA) !== Math.sign(b.twa) && Math.abs(d) > 25) this.adviceTxt = Math.abs(twaA) < 90 * D ? 'Vire de bord (Espace)' : 'Empanne (Espace)';
+    else if (Math.abs(d) < 8) this.adviceTxt = 'Bon cap, tout droit';
+    else this.adviceTxt = (d < 0 ? '◀ Tourne à gauche ' : 'Tourne à droite ▶ ') + Math.round(Math.abs(d)) + '°';
+  }
+
+  /** Choisir un cap (boussole, clic sur la carte) : le pilote s'en charge, sans jamais se mettre face au vent. */
+  steerTo(heading: number): void {
+    const b = this.me; if (b.fin != null || this.demo) return;
+    this.routeAuto = false;
+    const up = vmgAngles(this.cls.polar, Math.round(b.tws)).up * D;
+    let twa = norm(heading - this.wd);
+    if (Math.abs(twa) < up) twa = (Math.sign(twa) || b.tack) * up;
+    b.pilot.on = true;
+    if (this.assist.helm) { b.pilot.mode = 'vent'; b.pilot.set = twa; }
+    else { b.pilot.mode = 'cap'; b.pilot.set = norm(this.wd + twa); }
   }
 
   /**

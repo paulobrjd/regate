@@ -51,6 +51,7 @@ export function updateHud(g: Game | null, renderRank: () => void): void {
   const m = b.leg >= 1 && b.leg <= N ? c.marks[b.leg - 1] : null;
   set('hNext2', m ? fmtDist(Math.hypot(m.x - b.x, m.y - b.y)) + ' · à laisser à ' + (m.side === 'port' ? 'bâbord' : 'tribord') : c.name + ' · ' + n1(c.nm) + ' milles');
   document.querySelectorAll<HTMLElement>('[data-cmd^=head]').forEach(el => el.classList.toggle('on', +el.dataset.cmd!.slice(4) - 1 === (b.task?.kind === 'head' ? b.task.to : b.head)));
+  const rb = document.querySelector<HTMLElement>('[data-cmd=route]'); if (rb) { rb.classList.toggle('on', g.routeAuto); rb.firstChild!.textContent = g.routeAuto ? 'Route auto : oui' : 'Route auto'; }
   const pb = document.querySelector<HTMLElement>('[data-cmd=pilot]'); if (pb) { pb.classList.toggle('on', p.on); pb.firstChild!.textContent = p.on ? 'Débrayer' : 'Engager'; }
   if (g.endShown && !$('ovEnd').hidden) renderRank();
 }

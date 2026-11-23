@@ -46,6 +46,7 @@ export class Scene3D {
   private flecks: { g: T.BufferGeometry; pos: Float32Array; age: Float32Array; n: number };
   private fleckXZ: Float32Array;
   private shake = 0;
+  private arrow!: T.Mesh<T.ShapeGeometry, T.MeshBasicMaterial>;
   private drops: Drop[] = [];
   private gTimer = 0; private camYaw: number | null = null; private lastFov = 0;
   private eul = new T.Euler(); private tmp = new T.Vector3(); private hw = new T.Vector3();
@@ -172,6 +173,12 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     this.fleckXZ = new Float32Array(700 * 2).fill(1e9);
     this.spray = this.pts(900, [0.5, 0.8, 26], 1.2, 0.85);
 
+    {
+      const sh = new T.Shape(); sh.moveTo(0, -7); sh.lineTo(4.5, -1); sh.lineTo(1.6, -1); sh.lineTo(1.6, 6); sh.lineTo(-1.6, 6); sh.lineTo(-1.6, -1); sh.lineTo(-4.5, -1); sh.closePath();
+      const ag = new T.ShapeGeometry(sh); ag.rotateX(Math.PI / 2); // pointe vers -z (l'avant)
+      this.arrow = new T.Mesh(ag, new T.MeshBasicMaterial({ color: '#50ff96', transparent: true, opacity: 0.55, depthWrite: false, fog: false, side: T.DoubleSide }));
+      this.arrow.renderOrder = 5; scene.add(this.arrow);
+    }
     let drag: { x: number; y: number } | null = null;
     canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; try { canvas.setPointerCapture(e.pointerId); } catch { /* */ } });
     canvas.addEventListener('pointermove', e => {
@@ -506,6 +513,15 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       const s = Math.min(0.03, this.shake * 0.08 + (kn / 30) ** 2 * 0.004);
       cam.rotateX(Math.sin(tm * 23) * s * 0.6 + Math.sin(tm * 41) * s * 0.4);
       cam.rotateZ(Math.sin(tm * 17 + 1) * s * 0.5);
+    }
+    // flèche du cap conseillé, posée sur l'eau devant le bateau
+    this.arrow.visible = !g.demo && g.advice != null && me.fin == null && view === 'chase';
+    if (this.arrow.visible) {
+      // devant l'étrave (toujours dans le champ), orientée vers le cap conseillé
+      const a = g.advice!, d = 26;
+      const ax = me.x + Math.sin(me.h) * d, az = me.y - Math.cos(me.h) * d;
+      this.arrow.position.set(ax, this.wh(ax, az) * 0.8 + 0.4, az); this.arrow.rotation.y = -a;
+      this.arrow.material.opacity = 0.55 + 0.25 * Math.sin(tm * 5); this.arrow.scale.setScalar(1.7);
     }
     this.sun.position.set(me.x + this.sunDir.x * 100, this.sunDir.y * 100, me.y + this.sunDir.z * 100); this.sun.target.position.set(me.x, 0, me.y);
     this.ren.render(this.scene, cam);

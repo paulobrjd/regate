@@ -82,6 +82,7 @@ body.auto-sheets [data-need=sheets],body.auto-systems [data-need=systems],body.a
 .cmds kbd{font:600 12px Barlow,sans-serif;color:var(--muted);display:block}
 .cmds button.on kbd{color:#fff}
 .pad{grid-template-columns:repeat(2,minmax(110px,auto))}
+.pad .route{background:var(--buoy);color:#fff;border-color:var(--buoy)}.pad .route kbd{color:#fff}.pad button.route.on{filter:brightness(.85)}
 details.keys{flex:1 1 100%}
 details.keys summary{cursor:pointer;font-weight:600;color:var(--ink);margin-bottom:8px}
 

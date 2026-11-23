@@ -168,6 +168,7 @@ addEventListener('keydown', e => {
   else if (key === 'a') cmd(e.shiftKey ? 'pilotMode' : 'pilot');
   else if (e.code === 'Space') cmd('pilotTack');
   else if (key === 't') timeScale(e.shiftKey ? -1 : 1);
+  else if (key === 'g') cmd('route');
   else handled = false;
   if (handled) e.preventDefault();
 });
@@ -199,6 +200,30 @@ const input = (): BoatInput => ({
   headDir: (K.headOut ? 1 : 0) - (K.headIn ? 1 : 0),
   travDir: (K.travDown ? 1 : 0) - (K.travUp ? 1 : 0),
 });
+
+// ---------- pilotage à la souris / au doigt ----------
+// boussole : clic ou glisser pour choisir le cap ; en vue carte, clic sur l'eau = cap vers ce point
+function pointerSteer(e: PointerEvent): boolean {
+  const g = app.g; if (!g || !playing()) return false;
+  const r = c2d.cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, ring = c2d.ring;
+  const dx = x - ring.x, dy = y - ring.y;
+  if (dx * dx + dy * dy < ring.r * ring.r) {
+    if (dx * dx + dy * dy < 14 * 14) return true; // clic au centre : rien
+    unlockAudio(); g.steerTo(g.me.h + Math.atan2(dy, dx) + Math.PI / 2); return true;
+  }
+  if (app.view === 'top') {
+    const wx = c2d.cam.x + (x - c2d.VW / 2) / c2d.zoom, wy = c2d.cam.y + (y - c2d.VH / 2) / c2d.zoom;
+    unlockAudio(); g.steerTo(Math.atan2(wx - g.me.x, -(wy - g.me.y))); return true;
+  }
+  return false;
+}
+let ringDrag = false;
+$('game').addEventListener('pointerdown', e => {
+  if ((e.target as HTMLElement).closest('.ov')) return;
+  if (pointerSteer(e)) { ringDrag = true; e.preventDefault(); e.stopPropagation(); }
+}, { capture: true });
+$('game').addEventListener('pointermove', e => { if (ringDrag) { pointerSteer(e); e.stopPropagation(); } }, { capture: true });
+addEventListener('pointerup', () => { ringDrag = false; });
 
 // ---------- boucle : simulation à pas fixe, rendu interpolé ----------
 let last = performance.now(), hudT = 0, acc = 0;

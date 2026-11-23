@@ -52,3 +52,20 @@ describe('barre assistée (Débutant)', () => {
     void minKn;
   });
 });
+
+describe('aides au pilotage', () => {
+  it('la route auto mène le joueur jusqu\'à l\'arrivée', () => {
+    const g = new Game({ mode: 'solo', seed: 3, bots: 0, course: 'sprint', assist: { sheets: true, systems: true, sails: true, helm: true, safe: true } });
+    g.command('route');
+    for (let i = 0; i < 1500 / STEP && g.me.fin == null; i++) { if (!g.routeAuto && g.t > -55) g.command('route'); g.update(STEP, NO_INPUT); }
+    expect(g.me.fin).not.toBeNull();
+  }, 30000);
+  it('choisir un cap face au vent ne met jamais le bateau face au vent', () => {
+    const g = new Game({ mode: 'solo', seed: 3, bots: 0, course: 'sprint', assist: { sheets: true, systems: true, sails: true, helm: true, safe: true } });
+    for (let i = 0; i < 70 / STEP; i++) g.update(STEP, NO_INPUT);
+    g.steerTo(g.wd); // droit dans le vent
+    for (let i = 0; i < 30 / STEP; i++) g.update(STEP, NO_INPUT);
+    expect(Math.abs(g.me.twa)).toBeGreaterThan(35 * Math.PI / 180);
+    expect(g.me.v / 0.514444).toBeGreaterThan(5);
+  });
+});

@@ -1,7 +1,7 @@
 // Rendu 2D : vue du ciel (tactique, avec zoom) et surimpressions (instruments, réglage, classement, carte).
 import { D, TAU, clamp, hash, norm, fmt } from '../util/math';
 import { ISLANDS, shoreR } from '../physics/world';
-import { vmgAngles } from '../physics/polar';
+import { vmgAngles, polarSpeed } from '../physics/polar';
 import { headAngle, mainAngle } from '../physics/model';
 import type { Game } from '../game/game';
 import type { Boat } from '../physics/boat';
@@ -16,6 +16,8 @@ export class Canvas2D {
   DPR = 1; VW = 800; VH = 500;
   cam = { x: 0, y: 150 };
   zoomI = 3;
+  /** Boussole cliquable (coordonnées écran). */
+  ring = { x: -999, y: -999, r: 0 };
   rt = 0;
 
   constructor(readonly cv: HTMLCanvasElement) { this.ctx = cv.getContext('2d')!; }
@@ -170,7 +172,7 @@ export class Canvas2D {
 
   private drawTrim(me: Boat, auto: boolean, w: number, h: number): void {
     const ctx = this.ctx, anim = this.rt;
-    const narrow = w < 640, pw = Math.min(430, w - 24 - (narrow ? 110 : 0)), px = narrow ? 12 : (w - pw) / 2, ph = 124, py = h - ph - 12;
+    const narrow = w < 900, pw = Math.min(430, w - 24 - (narrow ? 190 : 0)), px = narrow ? 12 : (w - pw) / 2, ph = 124, py = h - ph - 12;
     this.panel(px, py, pw, ph, 16, 0.74);
     const x0 = px + 96, x1 = px + pw - 16, bw = x1 - x0, X = (v: number) => x0 + clamp(v, 0, 1) * bw;
     const row = (y: number, name: string, cur: number, tgt: number, keys: string) => {
@@ -221,6 +223,68 @@ export class Canvas2D {
       ctx.strokeStyle = `rgba(235,245,255,${a * Math.sin(ph * Math.PI)})`; ctx.lineWidth = 1.5 + hash(i, 5) * 1.5;
       ctx.beginPath(); ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0); ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1); ctx.stroke();
     }
+  }
+
+  /**
+   * Boussole tactile, bateau vers le haut : zone interdite face au vent (rouge), vitesse possible
+   * selon la direction (courbe verte), bouée (orange), cap conseillé (flèche verte), consigne (blanc).
+   * Un clic dessus choisit le cap.
+   */
+  private compass(g: Game, me: Boat, w: number, h: number): void {
+    const ctx = this.ctx, R = w < 640 ? 60 : 76, cx = w - R - 24, cy = h - R - 24, wd = g.wd;
+    this.ring = { x: cx, y: cy, r: R + 16 };
+    const sa = (H: number) => H - me.h - Math.PI / 2; // cap monde → angle écran
+    const tws = Math.max(4, Math.round(me.tws)), ang = vmgAngles(me.cls.polar, tws);
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,30,50,.68)'; ctx.beginPath(); ctx.arc(cx, cy, R + 16, 0, TAU); ctx.fill();
+    // zone interdite
+    ctx.fillStyle = 'rgba(232,56,79,.4)'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, sa(wd - ang.up * D), sa(wd + ang.up * D)); ctx.closePath(); ctx.fill();
+    // courbe des vitesses
+    let vmax = 1; for (let a = 0; a <= 180; a += 5) vmax = Math.max(vmax, polarSpeed(me.cls.polar, tws, a));
+    ctx.beginPath();
+    for (let a = -180; a <= 180; a += 4) {
+      const v = Math.abs(a) < ang.up ? 0 : polarSpeed(me.cls.polar, tws, Math.abs(a)) / vmax, r = R * (0.18 + 0.82 * v), q = sa(wd + a * D);
+      const X = cx + Math.cos(q) * r, Y = cy + Math.sin(q) * r; if (a === -180) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    }
+    ctx.closePath(); ctx.fillStyle = 'rgba(61,220,151,.16)'; ctx.fill(); ctx.strokeStyle = 'rgba(61,220,151,.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+    // graduations
+    ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1;
+    for (let k = 0; k < 12; k++) { const q = sa(k * Math.PI / 6); ctx.beginPath(); ctx.moveTo(cx + Math.cos(q) * (R + 4), cy + Math.sin(q) * (R + 4)); ctx.lineTo(cx + Math.cos(q) * (R + 11), cy + Math.sin(q) * (R + 11)); ctx.stroke(); }
+    const rim = (H: number, rr: number) => [cx + Math.cos(sa(H)) * rr, cy + Math.sin(sa(H)) * rr];
+    // vent : flèche qui entre par le bord
+    { const [x1, y1] = rim(wd, R + 14), [x2, y2] = rim(wd, R - 8), q = Math.atan2(y2 - y1, x2 - x1);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(x2 + Math.cos(q) * 6, y2 + Math.sin(q) * 6); ctx.lineTo(x2 + Math.cos(q + 2.5) * 8, y2 + Math.sin(q + 2.5) * 8); ctx.lineTo(x2 + Math.cos(q - 2.5) * 8, y2 + Math.sin(q - 2.5) * 8); ctx.fill(); }
+    // bouée visée
+    const c = g.course, N = c.marks.length, tm = me.leg >= 1 && me.leg <= N && !me.ocs ? c.marks[me.leg - 1] : { x: 0, y: me.leg > N ? 60 : -60 };
+    { const brg = Math.atan2(tm.x - me.x, -(tm.y - me.y)), [x, y] = rim(brg, R + 8); ctx.fillStyle = '#ff6a1f'; ctx.beginPath(); ctx.arc(x, y, 6, 0, TAU); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    // consigne (pilote)
+    if (me.pilot.on && !g.routeAuto) {
+      const H = me.pilot.mode === 'cap' ? me.pilot.set : wd + me.pilot.set, [x, y] = rim(H, R + 8);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 7, 0, TAU); ctx.stroke();
+    }
+    // cap conseillé
+    if (g.advice != null) {
+      const q = sa(g.advice), pul = 0.75 + 0.25 * Math.sin(this.rt * 6);
+      ctx.strokeStyle = `rgba(80,255,150,${pul})`; ctx.lineWidth = 3; ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(q) * (R - 4), cy + Math.sin(q) * (R - 4)); ctx.stroke(); ctx.setLineDash([]);
+      const tx = cx + Math.cos(q) * (R + 2), ty = cy + Math.sin(q) * (R + 2);
+      ctx.fillStyle = `rgba(80,255,150,${pul})`; ctx.beginPath(); ctx.moveTo(tx + Math.cos(q) * 10, ty + Math.sin(q) * 10); ctx.lineTo(tx + Math.cos(q + 2.2) * 9, ty + Math.sin(q + 2.2) * 9); ctx.lineTo(tx + Math.cos(q - 2.2) * 9, ty + Math.sin(q - 2.2) * 9); ctx.fill();
+    }
+    // le bateau au centre, étrave vers le haut
+    ctx.fillStyle = me.col; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx, cy - 15); ctx.quadraticCurveTo(cx + 7, cy - 6, cx + 6, cy + 11); ctx.lineTo(cx - 6, cy + 11); ctx.quadraticCurveTo(cx - 7, cy - 6, cx, cy - 15); ctx.fill(); ctx.stroke();
+    // conseil et route auto
+    const txt = g.routeAuto ? 'ROUTE AUTO · G pour reprendre la barre' : g.adviceTxt;
+    if (txt) {
+      ctx.font = '800 17px "Barlow Condensed",sans-serif'; const tw = Math.min(w - 40, ctx.measureText(txt).width + 26);
+      const bx = Math.min(w - 12 - tw, cx + R + 16 - tw), by = cy - R - 16 - 66;
+      ctx.fillStyle = g.routeAuto ? 'rgba(255,106,31,.9)' : 'rgba(4,30,50,.75)'; this.rrect(bx, by, tw, 30, 15); ctx.fill();
+      ctx.fillStyle = g.routeAuto ? '#fff' : /Vire|Empanne/.test(txt) ? '#ffd23f' : '#6dffaa'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(txt, bx + tw / 2, by + 16, tw - 12);
+      ctx.font = '600 11px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.textAlign = 'right';
+      ctx.fillText('clique sur la boussole pour choisir ton cap', cx + R + 16, by + 44);
+    }
+    ctx.restore();
   }
 
   /** Grand compteur de vitesse. */
@@ -313,7 +377,7 @@ export class Canvas2D {
     const pts = [{ x: 0, y: 0 }, ...c.marks];
     let X0 = Math.min(...pts.map(p => p.x)), X1 = Math.max(...pts.map(p => p.x)), Y0 = Math.min(...pts.map(p => p.y)), Y1 = Math.max(...pts.map(p => p.y));
     const pad = Math.max(X1 - X0, Y1 - Y0) * 0.12 + 300; X0 -= pad; X1 += pad; Y0 -= pad; Y1 += pad;
-    const mh = 150, mw = clamp(mh * (X1 - X0) / (Y1 - Y0), 70, 150), mx = w - mw - 12, my = h - mh - 12;
+    const mh = 130, mw = clamp(mh * (X1 - X0) / (Y1 - Y0), 60, 130), mx = w - mw - 12, my = st.length > 1 && w > 420 ? 12 + 14 + Math.min(8, st.length) * 20 + 10 : 12;
     const sc = Math.min((mw - 12) / (X1 - X0), (mh - 12) / (Y1 - Y0)), ox = mx + mw / 2 - (X0 + X1) / 2 * sc, oy = my + mh / 2 - (Y0 + Y1) / 2 * sc;
     const tx = (x: number) => ox + x * sc, ty = (y: number) => oy + y * sc;
     this.panel(mx, my, mw, mh, 10, 0.55);
@@ -335,7 +399,7 @@ export class Canvas2D {
     }
     if (!toS) this.speedLines(me, w, h);
     if (me.fin == null && !g.assist.sheets) this.drawTrim(me, false, w, h);
-    if (me.fin == null) this.speedo(me, w, h);
+    if (me.fin == null) { this.speedo(me, w, h); this.compass(g, me, w, h); }
     // manœuvre en cours
     if (me.task) {
       const T = me.task, p = clamp(T.t / T.dur, 0, 1), txt = T.kind === 'head' ? 'Changement de voile → ' + me.cls.heads[T.to].name : (T.to > T.from ? 'Prise du ' + T.to + (T.to > 1 ? 'e' : 'er') + ' ris' : 'Largage de ris');
