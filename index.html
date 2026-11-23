@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Régate au large</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;800&family=Barlow:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Régate <span>au large</span></h1>
+  <p>Prends le meilleur départ, enroule les trois bouées et coupe la ligne d'arrivée devant tout le monde.</p>
+</header>
+
+<div class="game" id="game">
+  <canvas id="gl" aria-hidden="true"></canvas>
+  <canvas id="c" aria-label="Plan d'eau de la régate"></canvas>
+
+  <div class="ov" id="ovStart">
+    <div class="box">
+      <h2>Prêt à régater ?</h2>
+      <div class="tabs">
+        <button class="tab on" id="tSolo">Contre l'ordi</button>
+        <button class="tab" id="tNet">Avec mes potes</button>
+      </div>
+      <div id="pSolo">
+        <div class="row">
+          <label class="field">Adversaires
+            <select id="nBots"><option>0</option><option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option></select>
+          </label>
+          <label class="field">Météo
+            <select id="met"><option value="0">Petit temps · 7 nds</option><option value="1" selected>Medium · 12 nds</option><option value="2">Brise · 18 nds</option></select>
+          </label>
+          <label class="field">Niveau
+            <select id="lvl"><option value="0">Plaisancier</option><option value="1" selected>Régatier</option><option value="2">Champion</option></select>
+          </label>
+        </div>
+        <label class="chk"><input type="checkbox" id="autoChk"> Réglage de voile automatique (débutant)</label>
+        <button class="go" id="goBtn">Larguer les amarres</button>
+      </div>
+      <div id="pNet" hidden>
+        <p>Le jeu en ligne revient bientôt, avec un vrai serveur multijoueur : salons publics et salons privés avec code.</p>
+        <p class="note">L'ancien mode en ligne ne marchait que sur claude.ai. En attendant le serveur, joue contre l'ordi.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovEnd" hidden>
+    <div class="box">
+      <h2 id="endTitle">Arrivée !</h2>
+      <div class="big" id="endTime">0:00.0</div>
+      <p id="endBest" class="note"></p>
+      <ol class="rank" id="endRank"></ol>
+      <div class="row">
+        <button class="go" id="againBtn">Nouvelle régate</button>
+        <button class="opt" id="menuBtn">Menu</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="hud">
+  <div class="st"><small>Position</small><b id="hPos">—</b></div>
+  <div class="st"><small>Vitesse</small><b id="hSpd">0,0 nds</b></div>
+  <div class="st"><small>Angle au vent</small><b class="txt" id="hTwa">0°</b><small id="hAw">apparent —</small></div>
+  <div class="st"><small>Gîte</small><b id="hHeel">0°</b><small id="hHike">assis</small><div class="gauge heel"><u id="gHeel"></u></div></div>
+  <div class="st" id="stTrim"><small>Réglage de voile</small><b class="txt" id="hTrim">—</b><div class="gauge"><i id="gOpt"></i><u id="gCur"></u></div></div>
+  <div class="st"><small>Chrono</small><b id="hTime">-0:30</b></div>
+  <div class="st"><small>Objectif</small><b class="txt" id="hNext">Ligne de départ</b></div>
+</div>
+
+<div class="ctl">
+  <div class="pad">
+    <button data-k="left">◀ Bâbord<kbd>← ou Q</kbd></button>
+    <button data-k="right">Tribord ▶<kbd>→ ou D</kbd></button>
+    <button data-k="up">Border<kbd>↑ ou Z</kbd></button>
+    <button data-k="down">Choquer<kbd>↓ ou S</kbd></button>
+    <button class="spi" id="spiBtn">Envoyer le spi<kbd>Espace</kbd></button>
+  </div>
+  <div class="keys">
+    <ul>
+      <li><b>Départ :</b> reste sous la ligne pendant le compte à rebours. Si tu es au-dessus au signal, tu dois repasser dessous.</li>
+      <li><b>Face au vent</b>, le bateau s'arrête : remonte vers la bouée 1 en tirant des bords à environ 45°.</li>
+      <li><b>Voile :</b> le panneau en bas de l'écran te guide : amène le curseur blanc dans la zone verte. Borde au près, choque au portant.</li>
+      <li><b>Bascules :</b> le vent tourne. « Refusante » au près = vire de bord ; « adonnante » = reste sur ce bord.</li>
+      <li><b>Empannage :</b> par vent fort, borde avant de passer vent arrière, sinon gare à l'empannage sauvage.</li>
+      <li><b>Spi :</b> au portant (vent arrière ou grand largue), il donne un gros coup d'accélérateur. Affale-le avant de remonter au vent.</li>
+      <li><b>Risées :</b> les zones sombres et ridées sur l'eau ont plus de vent. Le bateau gîte : choque un peu pour garder de la vitesse.</li>
+      <li><b>Gîte :</b> dans les risées le bateau penche et ton barreur se met au rappel. Si ça gîte trop, choque, sinon tu ralentis et tu peux dessaler.</li>
+      <li><b>Penons</b> (petits fils sur le foc, visibles du cockpit) : rouge au vent qui se lève = borde ; vert sous le vent qui décroche = choque.</li>
+      <li><b>Vue :</b> touche V (cockpit, poursuite, ciel). Clique-glisse sur l'eau pour regarder autour de toi.</li>
+    </ul>
+    <div class="row"><button class="opt" id="viewBtn">Vue : cockpit (V)</button><button class="opt" id="autoBtn">Réglage auto : non</button><button class="opt" id="sndBtn">Son : oui (M)</button></div>
+  </div>
+</div>
+</div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
