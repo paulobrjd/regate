@@ -208,6 +208,42 @@ export class Canvas2D {
     }
   }
 
+  /** Traits de vitesse sur les bords de l'écran, au-delà de ~14 nœuds. */
+  private speedLines(me: Boat, w: number, h: number): void {
+    const kn = me.v / 0.514444, a = clamp((kn - 9) / 16, 0, 1) * 0.42;
+    if (a <= 0) return;
+    const ctx = this.ctx, cx = w / 2, cy = h * 0.45, R = Math.hypot(w, h) / 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 46; i++) {
+      const ang = hash(i, 3) * TAU, sp = 0.6 + hash(i, 7) * 0.8;
+      const ph = (this.rt * sp * (0.6 + kn / 25) + hash(i, 11)) % 1;
+      const r0 = R * (0.55 + ph * 0.5), r1 = r0 + R * (0.06 + kn / 400);
+      ctx.strokeStyle = `rgba(235,245,255,${a * Math.sin(ph * Math.PI)})`; ctx.lineWidth = 1.5 + hash(i, 5) * 1.5;
+      ctx.beginPath(); ctx.moveTo(cx + Math.cos(ang) * r0, cy + Math.sin(ang) * r0); ctx.lineTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1); ctx.stroke();
+    }
+  }
+
+  /** Grand compteur de vitesse. */
+  private speedo(me: Boat, w: number, h: number): void {
+    const ctx = this.ctx, kn = Math.max(0, me.v / 0.514444), x = 16, y = h - (w < 640 ? 230 : 104);
+    const fly = me.foilLift / (9.81 * me.cls.mass) > 0.22;
+    this.panel(x, y, 150, 90, 14, 0.62);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = kn > 25 ? '#ffd23f' : '#fff'; ctx.font = '800 54px "Barlow Condensed",sans-serif';
+    const txt = kn.toFixed(1).replace('.', ','); ctx.fillText(txt, x + 12, y + 54);
+    const tw = ctx.measureText(txt).width;
+    ctx.font = '700 15px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText('nds', x + 16 + tw, y + 52);
+    const p = clamp(me.eff, 0, 1.2) / 1.2;
+    ctx.fillStyle = 'rgba(255,255,255,.16)'; this.rrect(x + 12, y + 64, 126, 8, 4); ctx.fill();
+    ctx.fillStyle = me.eff > 0.95 ? '#3ddc97' : me.eff > 0.8 ? '#f4a261' : '#e8384f'; this.rrect(x + 12, y + 64, 126 * p, 8, 4); ctx.fill();
+    ctx.font = '600 11px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillText('polaire ' + Math.round(me.eff * 100) + ' %', x + 12, y + 86);
+    if (fly) {
+      const pul = 0.75 + 0.25 * Math.sin(this.rt * 8);
+      ctx.fillStyle = `rgba(255,106,31,${pul})`; this.rrect(x + 92, y + 74, 50, 16, 8); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = '800 12px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center'; ctx.fillText('EN VOL', x + 117, y + 86);
+    }
+  }
+
   /** Surimpressions de jeu. toS : projection de la vue du ciel (null en 3D). */
   drawHUD(g: Game, boats: Boat[], me: Boat, toS: ToScreen | null): void {
     const ctx = this.ctx, w = this.VW, h = this.VH, t = g.t, c = g.course, N = c.marks.length;
@@ -253,9 +289,9 @@ export class Canvas2D {
         if (!lift && Math.abs(sh) > 7 && g.simT > g.shiftWarn && t > 0) { g.shiftWarn = g.simT + 40; g.say('Refusante de ' + Math.round(Math.abs(sh)) + '° : pense à virer !'); }
       }
     }
-    if (g.timeScale > 1 || g.mode === 'solo') {
+    if (g.timeScale > 1) {
       ctx.font = '800 14px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center';
-      ctx.fillStyle = g.timeScale > 1 ? '#ffd23f' : 'rgba(255,255,255,.6)'; ctx.fillText('TEMPS ×' + g.timeScale + ' (T)', 48, 136);
+      ctx.fillStyle = '#ffd23f'; ctx.fillText('ACCÉLÉRÉ ×' + g.timeScale + ' (T)', 48, 136);
     }
     // classement
     const st = g.standings();
@@ -297,11 +333,13 @@ export class Canvas2D {
       ctx.fillStyle = -t <= 10 ? '#ffd23f' : '#fff'; ctx.font = '800 44px "Barlow Condensed",sans-serif'; ctx.fillText(fmt(t), w / 2, 44);
       ctx.font = '600 12px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText('Reste sous la ligne', w / 2, 74);
     }
-    if (me.fin == null) this.drawTrim(me, g.assist.sheets, w, h);
+    if (!toS) this.speedLines(me, w, h);
+    if (me.fin == null && !g.assist.sheets) this.drawTrim(me, false, w, h);
+    if (me.fin == null) this.speedo(me, w, h);
     // manœuvre en cours
     if (me.task) {
       const T = me.task, p = clamp(T.t / T.dur, 0, 1), txt = T.kind === 'head' ? 'Changement de voile → ' + me.cls.heads[T.to].name : (T.to > T.from ? 'Prise du ' + T.to + (T.to > 1 ? 'e' : 'er') + ' ris' : 'Largage de ris');
-      const bw = 300, bx = w / 2 - bw / 2, by = h - 124 - 12 - 46;
+      const bw = 300, bx = w / 2 - bw / 2, by = g.assist.sheets ? h - 60 : h - 124 - 12 - 46;
       this.panel(bx, by, bw, 38, 12, 0.75);
       ctx.fillStyle = 'rgba(255,214,120,.35)'; this.rrect(bx + 4, by + 4, (bw - 8) * p, 30, 9); ctx.fill();
       ctx.fillStyle = '#fff'; ctx.font = '700 14px Barlow,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';

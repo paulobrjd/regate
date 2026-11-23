@@ -51,6 +51,10 @@ export class Scene3D {
   private dotTex: T.CanvasTexture;
   private wake: { g: T.BufferGeometry; pos: Float32Array; age: Float32Array; n: number };
   private spray: { g: T.BufferGeometry; pos: Float32Array; age: Float32Array; n: number };
+  /** Écume posée sur l'eau autour du bateau : immobile dans le monde, elle défile et fait sentir la vitesse. */
+  private flecks: { g: T.BufferGeometry; pos: Float32Array; age: Float32Array; n: number };
+  private fleckXZ: Float32Array;
+  private shake = 0;
   private drops: Drop[] = [];
   private gTimer = 0; private camYaw: number | null = null; private lastFov = 0;
   private eul = new T.Euler(); private tmp = new T.Vector3(); private hw = new T.Vector3();
@@ -151,7 +155,9 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 32, 32);
       return new T.CanvasTexture(c);
     })();
-    this.wake = this.pts(3000, [2.4, 3.2, 120], 6, 0.5);
+    this.wake = this.pts(4000, [2.6, 3.6, 140], 6, 0.55);
+    this.flecks = this.pts(700, [0.9, 0, 40], 4, 0.6);
+    this.fleckXZ = new Float32Array(700 * 2).fill(1e9);
     this.spray = this.pts(900, [0.5, 0.8, 26], 1.2, 0.85);
 
     let drag: { x: number; y: number } | null = null;
@@ -441,11 +447,11 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     if (isMe && r.hmesh.visible) this.setTells(r, b, ss, tm);
     // embruns
     const drops = this.drops;
-    if (b.knock <= 0 && b.v > 6 && drops.length < 850) {
-      let n = (b.v - 6) * dt * 40 * (1 + Math.max(0, (pb - pf)) * 3);
+    if (b.knock <= 0 && b.v > 4.5 && drops.length < 850) {
+      let n = (b.v - 4.5) * dt * 70 * (1 + Math.max(0, (pb - pf)) * 4) * (isMe ? 1.5 : 1);
       while (n > 0 && (n >= 1 || Math.random() < n)) {
         n--; const sd = Math.random() < 0.5 ? -1 : 1, bx = X + fx * 8.5, bz = Z + fz * 8.5;
-        drops.push({ x: bx + fz * sd * 1.2, y: y + 0.4, z: bz - fx * sd * 1.2, vx: fx * b.v * 0.3 + fz * sd * (1.5 + Math.random() * 3), vy: 1.5 + Math.random() * 3.5, vz: fz * b.v * 0.3 - fx * sd * (1.5 + Math.random() * 3), a: 0 });
+        drops.push({ x: bx + fz * sd * 1.2, y: y + 0.4, z: bz - fx * sd * 1.2, vx: fx * b.v * 0.3 + fz * sd * (2 + Math.random() * 4), vy: 2 + Math.random() * (2 + b.v * 0.35), vz: fz * b.v * 0.3 - fx * sd * (2 + Math.random() * 4), a: 0 });
       }
     }
   }
@@ -482,6 +488,10 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     }
     drops.forEach((d, i) => { spray.pos[i * 3] = d.x; spray.pos[i * 3 + 1] = d.y; spray.pos[i * 3 + 2] = d.z; spray.age[i] = d.a; });
     spray.g.setDrawRange(0, drops.length); spray.g.attributes.position.needsUpdate = true; spray.g.attributes.age.needsUpdate = true;
+    // tremblement : vitesse + coups de mer
+    const kn = Math.max(0, me.v) / 0.514444;
+    this.shake = this.shake * Math.exp(-dt * 3) + Math.max(0, kn - 12) * 0.0006 * dt * 60;
+    this.moveFlecks(me, dt);
     // caméra
     if (look.idle > 2) { look.yaw *= 1 - Math.min(1, dt * 1.2); look.pitch *= 1 - Math.min(1, dt * 1.2); }
     look.idle += dt;
@@ -493,15 +503,16 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       cam.position.copy(this.hw);
       const tack = me.twa >= 0 ? 1 : -1;
       this.eul.set(-0.06 + mr.roll.rotation.x * 0.6 + look.pitch, -me.h + look.yaw, -tack * mr.heel * 0.55, 'YXZ'); cam.quaternion.setFromEuler(this.eul);
-      if (this.lastFov !== 75) { cam.fov = 75; this.lastFov = 75; cam.updateProjectionMatrix(); }
+      this.setFov(74 + clamp((kn - 8) * 0.7, 0, 16), dt);
     } else {
       if (this.camYaw == null) this.camYaw = me.h;
       this.camYaw = norm(this.camYaw + norm(me.h - this.camYaw) * Math.min(1, dt * 1.6));
-      const cy = this.camYaw + look.yaw + 0.35, dist = 38 - look.pitch * 18, tx = X - Math.sin(cy) * dist, tz = Z + Math.cos(cy) * dist, ty = 12 + look.pitch * -22;
+      // caméra basse et proche : la mer défile ; elle recule un peu et s'élargit avec la vitesse
+      const cy = this.camYaw + look.yaw + 0.3, dist = 24 + kn * 0.25 - look.pitch * 14, tx = X - Math.sin(cy) * dist, tz = Z + Math.cos(cy) * dist, ty = 6.5 + kn * 0.08 + look.pitch * -18;
       if (Math.hypot(cam.position.x - tx, cam.position.z - tz) > 200) cam.position.set(tx, ty, tz);
       cam.position.lerp(this.tmp.set(tx, Math.max(3, ty), tz), Math.min(1, dt * 3));
-      cam.lookAt(X + Math.sin(cy) * 8, 9, Z - Math.cos(cy) * 8);
-      if (this.lastFov !== 60) { cam.fov = 60; this.lastFov = 60; cam.updateProjectionMatrix(); }
+      cam.lookAt(X + Math.sin(cy) * 10, 7, Z - Math.cos(cy) * 10);
+      this.setFov(58 + clamp((kn - 8) * 0.9, 0, 22), dt);
     }
     // mer + risées
     const wU = this.wU;
@@ -526,6 +537,37 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     if (nm) { this.ring.position.set(nm.x, 0.6, nm.y); this.ring.material.opacity = 0.35 + 0.25 * Math.sin(tm * 4); }
     this.line.material.opacity = me.leg === 0 || me.leg > g.course.marks.length || me.ocs ? 0.95 : 0.3;
     this.flagM.color.set(g.t < 0 ? '#3d7bd9' : '#ff6a1f');
+    if (this.shake > 0.0005) {
+      const s = Math.min(0.03, this.shake * 0.08 + (kn / 30) ** 2 * 0.004);
+      cam.rotateX(Math.sin(tm * 23) * s * 0.6 + Math.sin(tm * 41) * s * 0.4);
+      cam.rotateZ(Math.sin(tm * 17 + 1) * s * 0.5);
+    }
     this.ren.render(this.scene, cam);
+  }
+
+  private setFov(target: number, dt: number): void {
+    const f = this.lastFov ? this.lastFov + (target - this.lastFov) * Math.min(1, dt * 2) : target;
+    if (Math.abs(f - this.cam.fov) > 0.05) { this.cam.fov = f; this.cam.updateProjectionMatrix(); }
+    this.lastFov = f;
+  }
+
+  /** Écume immobile sur l'eau, recyclée devant le bateau quand elle passe derrière. */
+  private moveFlecks(me: Boat, dt: number): void {
+    const F = this.flecks, xz = this.fleckXZ, R = 140, fx = Math.sin(me.h), fz = -Math.cos(me.h);
+    for (let i = 0; i < F.n; i++) {
+      let x = xz[i * 2], z = xz[i * 2 + 1];
+      const dx = x - me.x, dz = z - me.y;
+      if (dx * dx + dz * dz > R * R) {
+        // réapparaît au hasard, plutôt devant
+        const a = Math.random() * TAU, r = (0.15 + 0.85 * Math.sqrt(Math.random())) * R;
+        x = me.x + Math.cos(a) * r; z = me.y + Math.sin(a) * r;
+        if ((x - me.x) * fx + (z - me.y) * fz < -20 && Math.random() < 0.7) { x = me.x + fx * r * 0.9 + Math.cos(a) * 30; z = me.y + fz * r * 0.9 + Math.sin(a) * 30; }
+        xz[i * 2] = x; xz[i * 2 + 1] = z;
+        F.age[i] = Math.random() * 2;
+      }
+      F.pos[i * 3] = x; F.pos[i * 3 + 1] = this.wh(x, z) * 0.8 + 0.05; F.pos[i * 3 + 2] = z;
+    }
+    void dt;
+    F.g.setDrawRange(0, F.n); F.g.attributes.position.needsUpdate = true; F.g.attributes.age.needsUpdate = true;
   }
 }

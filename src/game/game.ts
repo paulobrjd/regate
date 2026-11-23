@@ -11,6 +11,8 @@ import {
   config, NO_INPUT, type Boat, type BoatEvent, type StepEnv, type Obstacle, type BoatInput,
 } from '../physics/boat';
 import { LEVELS, mkAI, aiSteer } from '../ai/bot';
+import { vmgAngles } from '../physics/polar';
+import { norm } from '../util/math';
 import { applyAssist, newMem, ASSISTS, type Assist, type AssistMem } from './assist';
 import { COURSES, crossesRay, segCross, type Course } from './course';
 
@@ -41,6 +43,8 @@ export interface GameOpts {
   col?: string;
   cls?: BoatClass;
   startT?: number;
+  /** Rythme de base (1 = temps réel, 2 = dynamique). */
+  pace?: number;
 }
 
 export interface Standing { name: string; col: string; me: boolean; leg: number; fin: number | null; ocs: boolean; d: number }
@@ -67,10 +71,13 @@ export class Game {
   endShown = false;
   over = false;
   timeScale = 1;
+  /** Rythme de base : le temps du jeu passe `pace` fois plus vite que le temps réel (2 = dynamique). */
+  pace = 2;
   onSfx: (s: Sfx) => void = () => {};
   onFinish: () => void = () => {};
   private env: StepEnv;
   private meMem: AssistMem = newMem();
+  private pinch = 0;
   private obstacles: Obstacle[];
 
   constructor(o: GameOpts) {
@@ -85,6 +92,7 @@ export class Game {
     this.cal = calibration(this.cls);
     this.assist = o.assist ?? ASSISTS.equipier.a;
     this.t = o.startT ?? -PRE;
+    this.pace = o.pace ?? 3;
     this.lastT = this.t - 1;
     this.wd = this.wind.dir(this.t);
     const rng = this.rng, c = this.course;
@@ -201,8 +209,10 @@ export class Game {
         aiSteer(b, this.course, t, this.wd);
         applyAssist(b, { sheets: true, systems: true, sails: true }, this.cal, b.ai.mem, this.simT, dt, b.ai.err);
       } else if (b.fin == null) {
-        inp = input;
+        inp = this.assist.helm ? this.assistedHelm(b, input, dt) : input;
+        b.safe = !!this.assist.safe;
         applyAssist(b, this.assist, this.cal, this.meMem, this.simT, dt);
+        if (this.assist.sails) b.energy = 1; // manœuvres automatiques : le skipper ne s'épuise pas
       } else b.pilot = { on: true, mode: 'cap', set: this.wd + Math.PI / 2 };
       stepBoat(b, dt, inp, this.env);
       this.progress(b);
@@ -212,6 +222,27 @@ export class Game {
     this.autoSlow();
     if (this.demo && (this.boats.every(b => b.fin != null) || t > 1500)) this.over = true;
     if (this.msgT > 0) this.msgT -= dt;
+  }
+
+  /**
+   * Barre assistée : ← → font tourner la consigne d'angle au vent (vitesse constante à l'écran).
+   * On ne peut pas lofer plus haut que l'angle de près optimal : insister fait virer de bord.
+   * Passer le vent arrière fait empanner tout seul.
+   */
+  private assistedHelm(b: Boat, input: BoatInput, dt: number): BoatInput {
+    const p = b.pilot;
+    if (!p.on || p.mode !== 'vent') { p.on = true; p.mode = 'vent'; p.set = Math.abs(b.twa) < 40 * D ? Math.sign(b.twa || 1) * 45 * D : b.twa; }
+    const up = vmgAngles(this.cls.polar, Math.round(b.tws)).up * D;
+    if (input.helm) {
+      let s = norm(p.set + input.helm * (45 / this.pace) * D * dt);
+      if (Math.abs(s) < up) {
+        s = Math.sign(p.set || 1) * up;
+        this.pinch += dt / this.pace;
+        if (this.pinch > 0.3) { s = -s; this.pinch = -0.6; this.say('Virement de bord !'); }
+      } else if (this.pinch > 0) this.pinch = 0;
+      p.set = s;
+    } else if (this.pinch > 0) this.pinch = 0; else this.pinch = Math.min(0, this.pinch + dt / this.pace);
+    return { ...input, helm: 0 };
   }
 
   /** Repasse en temps réel près des moments importants. */

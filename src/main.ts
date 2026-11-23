@@ -30,14 +30,19 @@ const sel = (id: string) => $<HTMLSelectElement>(id);
 sel('course').innerHTML = COURSES.map(c => `<option value="${c.id}">${c.name} · ${c.nm.toFixed(1).replace('.', ',')} milles</option>`).join('');
 sel('assist').innerHTML = Object.entries(ASSISTS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
 const prefs = (() => { try { return JSON.parse(localStorage.getItem('regate-prefs') || '{}'); } catch { return {}; } })();
-for (const k of ['course', 'met', 'nBots', 'lvl', 'assist']) if (prefs[k] != null) sel(k).value = prefs[k];
-if (!prefs.assist) sel('assist').value = 'equipier';
+for (const k of ['course', 'met', 'nBots', 'lvl', 'assist', 'pace']) if (prefs[k] != null) sel(k).value = prefs[k];
+if (!prefs.assist) sel('assist').value = 'debutant';
+if (!prefs.course) sel('course').value = 'sprint';
 const descCourse = () => { const c = COURSES.find(x => x.id === sel('course').value)!; $('courseDesc').textContent = c.desc + (bests[c.id] ? ' Ton record : ' + fmt(bests[c.id]) + '.' : ''); };
 sel('course').addEventListener('change', descCourse); descCourse();
 
 // ---------- partie ----------
 function start(g: Game): void {
   app.g = g; g.onSfx = sfx; g.onFinish = finishMe;
+  // on masque les commandes que l'assistance fait à ta place
+  const a = g.assist, cl = document.body.classList;
+  cl.toggle('auto-sheets', a.sheets); cl.toggle('auto-systems', a.systems); cl.toggle('auto-sails', a.sails);
+  cl.toggle('beginner', a.sheets && a.systems && a.sails);
   c2d.resetCam(g.me.x, g.me.y - 80); acc = 0; paused = false;
 }
 function demo(): void {
@@ -46,9 +51,9 @@ function demo(): void {
 }
 function startSolo(): void {
   unlockAudio();
-  const p = { course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value };
+  const p = { course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value, pace: sel('pace').value };
   try { localStorage.setItem('regate-prefs', JSON.stringify(p)); } catch { /* */ }
-  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, course: p.course, assist: ASSISTS[p.assist].a }));
+  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, course: p.course, assist: ASSISTS[p.assist].a, pace: +p.pace }));
   $('ovStart').hidden = true; $('ovEnd').hidden = true; $('resumeBtn').hidden = true;
 }
 function menu(): void {
@@ -100,7 +105,7 @@ function zoom(d: number): void { c2d.zoomI = Math.max(0, Math.min(ZOOMS.length -
 function timeScale(d: number): void {
   const g = app.g; if (!g || g.demo || g.mode !== 'solo') return;
   const i = Math.max(0, Math.min(TIME_SCALES.length - 1, TIME_SCALES.indexOf(g.timeScale) + d));
-  g.timeScale = TIME_SCALES[i]; g.say(g.timeScale > 1 ? 'Temps accéléré ×' + g.timeScale : 'Temps réel');
+  g.timeScale = TIME_SCALES[i]; g.say(g.timeScale > 1 ? 'Temps accéléré ×' + g.timeScale : 'Vitesse normale');
 }
 $('viewBtn').addEventListener('click', nextView);
 $('zoomBtn').addEventListener('click', () => zoom(c2d.zoomI >= ZOOMS.length - 1 ? -ZOOMS.length : 1));
@@ -199,7 +204,7 @@ const input = (): BoatInput => ({
 let last = performance.now(), hudT = 0, acc = 0;
 function draw(g: Game, dt: number, alpha: number): void {
   const { boats, me } = snapshot(g, alpha);
-  const rt = g.simT - STEP + alpha * STEP;
+  const rt = (g.simT - STEP + alpha * STEP) / (g.demo ? 2 : g.pace);
   c2d.rt = rt;
   if (app.view !== 'top' && R3) {
     c2d.clear();
@@ -215,7 +220,7 @@ function loop(now: number): void {
   const g = app.g;
   if (g) {
     if (!paused) {
-      acc += dt * g.timeScale;
+      acc += dt * g.timeScale * (g.demo ? 2 : g.pace);
       const inp = input(), t0 = performance.now();
       while (acc >= STEP) {
         g.update(STEP, inp); acc -= STEP;

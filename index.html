@@ -11,7 +11,7 @@
 <div class="wrap">
 <header>
   <h1>Régate <span>au large</span></h1>
-  <p>Skipper d'un IMOCA 60 à foils : règle tes voiles, bascule la quille, sors le foil et coupe la ligne en tête.</p>
+  <p>Prends la barre d'un IMOCA 60 à foils, décolle à plus de 20 nœuds et coupe la ligne en tête.</p>
 </header>
 
 <div class="game" id="game">
@@ -48,6 +48,9 @@
           <label class="field">Assistance
             <select id="assist"></select>
           </label>
+          <label class="field">Rythme
+            <select id="pace"><option value="3" selected>Arcade (rapide)</option><option value="2">Dynamique</option><option value="1">Réaliste (temps réel)</option></select>
+          </label>
         </div>
         <div class="row">
           <button class="go" id="goBtn">Larguer les amarres</button>
@@ -81,9 +84,9 @@
   <div class="st"><small>Vent réel</small><b class="txt" id="hTw">—</b><small id="hAw">apparent —</small></div>
   <div class="st" id="stHeel"><small>Gîte</small><b id="hHeel">0°</b><small id="hKeel">quille —</small><div class="gauge heel"><u id="gHeel"></u></div></div>
   <div class="st" id="stSail"><small>Voilure</small><b class="txt" id="hSail">—</b><small id="hSailTip">&nbsp;</small></div>
-  <div class="st"><small>Foils · ballasts</small><b class="txt" id="hSys">—</b><small id="hSys2">&nbsp;</small></div>
-  <div class="st" id="stEn"><small>Énergie du skipper</small><b id="hEn">100 %</b><div class="gauge"><u id="gEn"></u></div></div>
-  <div class="st"><small>Pilote (A)</small><b class="txt" id="hPilot">débrayé</b><small id="hPilot2">&nbsp;</small></div>
+  <div class="st" data-need="systems"><small>Foils · ballasts</small><b class="txt" id="hSys">—</b><small id="hSys2">&nbsp;</small></div>
+  <div class="st" id="stEn" data-need="sails"><small>Énergie du skipper</small><b id="hEn">100 %</b><div class="gauge"><u id="gEn"></u></div></div>
+  <div class="st" data-need="adv"><small>Pilote (A)</small><b class="txt" id="hPilot">débrayé</b><small id="hPilot2">&nbsp;</small></div>
   <div class="st"><small>Chrono</small><b id="hTime">-1:00</b><small id="hScale">temps réel</small></div>
   <div class="st"><small>Objectif</small><b class="txt" id="hNext">Ligne de départ</b><small id="hNext2">&nbsp;</small></div>
 </div>
@@ -92,47 +95,48 @@
   <div class="pad">
     <button data-k="left">◀ Barre<kbd>← ou Q</kbd></button>
     <button data-k="right">Barre ▶<kbd>→ ou D</kbd></button>
-    <button data-k="mainIn">GV : border<kbd>↑ ou Z</kbd></button>
-    <button data-k="mainOut">GV : choquer<kbd>↓ ou S</kbd></button>
-    <button data-k="headIn">Foc : border<kbd>Maj + ↑</kbd></button>
-    <button data-k="headOut">Foc : choquer<kbd>Maj + ↓</kbd></button>
-    <button data-k="travUp">Chariot au vent<kbd>W</kbd></button>
-    <button data-k="travDown">Chariot sous le vent<kbd>X</kbd></button>
+    <button data-k="mainIn" data-need="sheets">GV : border<kbd>↑ ou Z</kbd></button>
+    <button data-k="mainOut" data-need="sheets">GV : choquer<kbd>↓ ou S</kbd></button>
+    <button data-k="headIn" data-need="sheets">Foc : border<kbd>Maj + ↑</kbd></button>
+    <button data-k="headOut" data-need="sheets">Foc : choquer<kbd>Maj + ↓</kbd></button>
+    <button data-k="travUp" data-need="sheets">Chariot au vent<kbd>W</kbd></button>
+    <button data-k="travDown" data-need="sheets">Chariot sous le vent<kbd>X</kbd></button>
   </div>
   <div class="cmds">
-    <div class="grp"><small>Voile d'avant</small>
+    <div class="grp" data-need="sails"><small>Voile d'avant</small>
       <button data-cmd="head1" class="sail">J1<kbd>1</kbd></button><button data-cmd="head2" class="sail">J2<kbd>2</kbd></button><button data-cmd="head3" class="sail">J3<kbd>3</kbd></button><button data-cmd="head4" class="sail">Code 0<kbd>4</kbd></button><button data-cmd="head5" class="sail">Gennaker<kbd>5</kbd></button>
     </div>
-    <div class="grp"><small>Grand-voile</small>
+    <div class="grp" data-need="sails"><small>Grand-voile</small>
       <button data-cmd="reefIn">Prendre un ris<kbd>P</kbd></button><button data-cmd="reefOut">Larguer un ris<kbd>O</kbd></button>
     </div>
-    <div class="grp"><small>Systèmes</small>
+    <div class="grp" data-need="systems"><small>Systèmes</small>
       <button data-cmd="keel">Quille<kbd>K</kbd></button><button data-cmd="foils">Foils<kbd>F</kbd></button><button data-cmd="ballast">Ballast<kbd>B</kbd></button>
     </div>
-    <div class="grp"><small>Pilote automatique</small>
+    <div class="grp" data-need="adv"><small>Pilote automatique</small>
       <button data-cmd="pilot">Engager<kbd>A</kbd></button><button data-cmd="pilotMode">Cap / vent<kbd>Maj + A</kbd></button><button data-cmd="pilotTack">Virer / empanner<kbd>Espace</kbd></button>
     </div>
     <div class="grp"><small>Affichage</small>
       <button id="timeBtn">Temps ×1<kbd>T</kbd></button><button id="viewBtn">Vue : cockpit<kbd>C</kbd></button><button id="zoomBtn">Zoom carte<kbd>+ / −</kbd></button><button id="sndBtn">Son : oui<kbd>M</kbd></button>
     </div>
   </div>
-  <details class="keys" id="help">
-    <summary>Aide : comment mener un IMOCA (H)</summary>
+  <div class="keys" id="help">
     <ul>
       <li><b>Départ :</b> reste sous la ligne pendant le compte à rebours, puis coupe-la entre le bateau comité et la bouée jaune.</li>
-      <li><b>Voiles :</b> amène les curseurs blancs dans les zones vertes. Au près on borde, au portant on choque. Les penons du foc te guident en vue cockpit.</li>
-      <li><b>Voile d'avant (1 à 5) :</b> J1 au près dans le petit temps, J2 puis J3 quand le vent monte, Code 0 au reaching, gennaker au portant. Un changement prend 45 à 75 s.</li>
-      <li><b>Ris (P / O) :</b> quand ça gîte trop au près dans la brise, réduis la grand-voile.</li>
-      <li><b>Quille (K) :</b> bascule-la au vent pour redresser le bateau. Après chaque virement, elle se retrouve sous le vent : rebascule-la !</li>
-      <li><b>Foils (F) :</b> sors le foil sous le vent dès que ça va vite (au travers surtout) ; il soulève le bateau. Le foil au vent ne sert qu'à freiner.</li>
-      <li><b>Ballast (B) :</b> remplis le ballast au vent au près dans la brise ; après un virement, transfère-le.</li>
-      <li><b>Pilote (A) :</b> il tient un cap ou un angle au vent ; ← → décalent la consigne (Maj : 10°). Espace : virement ou empannage au pilote.</li>
-      <li><b>Gîte :</b> au-delà de 40° le bateau part au lof ; sans équilibre il se couche.</li>
-      <li><b>Énergie :</b> chaque manœuvre fatigue le skipper ; épuisé, il manœuvre plus lentement.</li>
-      <li><b>Temps (T) :</b> accélère le temps sur les longs bords (jusqu'à ×50), il revient à ×1 près des bouées.</li>
-      <li><b>Vue (C) :</b> cockpit, poursuite, carte tactique avec laylines. Clique-glisse pour regarder autour.</li>
+      <li><b>Barre (← →) :</b> en Débutant, tu choisis juste ta direction. Le bateau ne se plante jamais face au vent : insiste vers le vent pour virer de bord, passe le vent arrière pour empanner. Pour remonter au vent, tire des bords en zigzag.</li>
+      <li><b>Vitesse :</b> au-delà de 15 nœuds le foil soulève le bateau (« EN VOL ») : c'est au travers, vent de côté, qu'on va le plus vite.</li>
+      <li><b>Vue (C) :</b> poursuite, cockpit ou carte. <b>T</b> accélère le temps sur les longs bords. <b>Échap</b> : pause.</li>
     </ul>
-  </details>
+    <details>
+      <summary>Pour aller plus loin (assistance Équipier ou Skipper)</summary>
+      <ul>
+        <li><b>Écoutes (↑ ↓, Maj + ↑ ↓) :</b> amène les curseurs blancs dans les zones vertes ; chariot avec W / X.</li>
+        <li><b>Voile d'avant (1 à 5) :</b> J1 au près dans le petit temps, J2 puis J3 quand le vent monte, Code 0 au travers, gennaker au portant.</li>
+        <li><b>Ris (P / O) :</b> réduis la grand-voile quand ça gîte trop.</li>
+        <li><b>Quille (K), foils (F), ballast (B) :</b> au vent après chaque virement.</li>
+        <li><b>Pilote (A) :</b> tient le cap ; ← → décalent la consigne ; Espace : virement au pilote.</li>
+      </ul>
+    </details>
+  </div>
 </div>
 </div>
 <script type="module" src="/src/main.ts"></script>

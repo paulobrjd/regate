@@ -45,7 +45,7 @@ export function updateHud(g: Game | null, renderRank: () => void): void {
   set('hPilot', !p.on ? 'débrayé' : p.mode === 'cap' ? 'cap ' + String(Math.round(((p.set / D) % 360 + 360) % 360)).padStart(3, '0') + '°' : 'vent ' + Math.round(Math.abs(p.set) / D) + '° ' + (p.set >= 0 ? 'bâbord' : 'tribord'));
   set('hPilot2', p.on ? '← → : ±1° · Maj : ±10°' : 'tu barres');
   set('hTime', g.demo ? '-1:00' : b.fin != null ? fmt(b.fin) : fmt(g.t));
-  set('hScale', g.timeScale > 1 ? 'temps accéléré ×' + g.timeScale : 'temps réel');
+  set('hScale', g.timeScale > 1 ? 'temps accéléré ×' + g.timeScale : g.pace >= 3 ? 'rythme arcade' : g.pace > 1 ? 'rythme dynamique' : 'temps réel');
   const next = b.fin != null ? 'Terminé' : b.ocs ? 'Repasser sous la ligne' : b.leg === 0 ? 'Ligne de départ' : b.leg > N ? 'Ligne d\'arrivée' : c.marks[b.leg - 1].name;
   set('hNext', next);
   const m = b.leg >= 1 && b.leg <= N ? c.marks[b.leg - 1] : null;

@@ -62,6 +62,9 @@ function build(id: string, name: string, desc: string, defs: MarkDef[]): Course 
 }
 
 export const COURSES: readonly Course[] = [
+  build('sprint', 'Sprint', 'Un mille au près, demi-tour, retour à fond au portant. Court et intense.', [
+    { x: 0, y: -950, name: 'Bouée au vent', side: 'port' },
+  ]),
   build('banane', 'Banane courte', 'Un bord de près jusqu\'à la bouée au vent, puis retour au portant.', [
     { x: 0, y: -1850, name: 'Bouée au vent', side: 'port' },
   ]),

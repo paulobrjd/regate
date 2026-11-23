@@ -29,6 +29,8 @@ export interface Boat {
   ballP: number; ballS: number; ballPT: number; ballST: number;
   energy: number;
   pilot: Pilot;
+  /** Mode indulgent : pas de départ au lof, de chavirage ni d'empannage sauvage. */
+  safe: boolean;
   /** Facteur de performance (IA : habileté de l'équipage virtuel). */
   perf: number;
   // incidents (s restantes)
@@ -78,7 +80,7 @@ export function mkBoat(cls: BoatClass, o: Partial<Boat>): Boat {
     mainSheet: 0.4, trav: 0.5, headSheet: 0.5,
     head: 0, reefs: 0, task: null,
     keel: 0, keelT: 0, foilP: 0, foilS: 0, foilPT: 0, foilST: 0, ballP: 0, ballS: 0, ballPT: 0, ballST: 0,
-    energy: 1, pilot: { on: false, mode: 'vent', set: 90 * D }, perf: 1,
+    energy: 1, safe: false, pilot: { on: false, mode: 'vent', set: 90 * D }, perf: 1,
     broach: 0, knock: 0, aground: 0, capT: 0,
     tws: 12, twsAvg: 0, twa: 90 * D, awa: 60 * D, aws: 15, tack: 1, lastTack: 1,
     target: 0, heelEq: 0, depower: 0, depT: 0, ideal: { mainSheet: 0.3, trav: 1, headSheet: 0.5 }, eff: 1, headPow: 1, mainPow: 1, foilLift: 0,
@@ -221,7 +223,7 @@ export function stepBoat(b: Boat, dt: number, inp: BoatInput, env: StepEnv): voi
   let rudT: number;
   if (b.broach > 0) { b.broach -= dt; rudT = -b.tack * 0.45; }
   else if (b.pilot.on) rudT = pilotRudder(b, wd);
-  else rudT = inp.helm * 0.42;
+  else rudT = inp.helm * 0.42 * clamp(5 / Math.max(1, Math.abs(b.v)), 0.4, 1);
   b.rud = approach(b.rud, rudT, 1.5 * dt);
   const hd = b.heel / D;
   const grip = clamp(1 - (hd - 28) / 16, 0.15, 1);
@@ -242,7 +244,7 @@ export function stepBoat(b: Boat, dt: number, inp: BoatInput, env: StepEnv): voi
     const gybe = twaDeg > 90;
     b.lastTack = b.tack;
     b.energy = Math.max(0, b.energy - (gybe ? 0.03 : 0.02));
-    if (gybe && b.tws > 18 && b.mainSheet > 0.55 && b.fin == null) {
+    if (gybe && b.tws > 18 && b.mainSheet > 0.55 && b.fin == null && !b.safe) {
       b.v *= 0.7; b.broach = 4; env.event(b, 'crashGybe');
     } else env.event(b, gybe ? 'gybe' : 'tack');
   }
@@ -294,13 +296,14 @@ export function stepBoat(b: Boat, dt: number, inp: BoatInput, env: StepEnv): voi
   b.target = polarSpeed(cls.polar, b.tws, twaDeg);
 
   // gîte : relaxation vers l'équilibre ; pas d'équilibre = chavirage
-  const hT = Number.isNaN(f.heelEq) ? 85 * D : f.heelEq;
+  let hT = Number.isNaN(f.heelEq) ? 85 * D : f.heelEq;
+  if (b.safe) hT = Math.min(hT, 34 * D);
   b.heel += (hT - b.heel) * Math.min(1, dt / 1.1);
   if ((Number.isNaN(f.heelEq) || b.heel > 62 * D) && b.fin == null) {
     b.capT += dt;
     if (b.capT > 1) { b.capT = 0; b.knock = 25; b.broach = 0; b.task = null; env.event(b, 'knockdown'); return; }
   } else b.capT = Math.max(0, b.capT - dt);
-  if (b.heel > 42 * D && b.broach <= 0 && b.v > 3 && b.fin == null) { b.broach = 5; env.event(b, 'broach'); }
+  if (b.heel > 42 * D && b.broach <= 0 && b.v > 3 && b.fin == null && !b.safe) { b.broach = 5; env.event(b, 'broach'); }
 
   // --- vitesse ---
   const mass = (cls.mass + cls.ballastMax * (b.ballP + b.ballS)) * 1.15;
@@ -322,7 +325,11 @@ export function stepBoat(b: Boat, dt: number, inp: BoatInput, env: StepEnv): voi
   const slip = Math.max(0, 1 - b.v) * 0.03 * tws;
   b.x += Math.sin(cog) * b.v * dt - Math.sin(wd) * slip * dt;
   b.y += -Math.cos(cog) * b.v * dt + Math.cos(wd) * slip * dt;
-  if (b.wt > 0.12 && b.v > 0.8) { b.wt = 0; b.wake.push({ x: b.x - fx * 9, y: b.y - fy * 9, t: 0 }); }
+  if (b.wt > 0.1 && b.v > 0.8) {
+    b.wt = 0;
+    const sx = -fy * 2.2, sy = fx * 2.2; // vers tribord
+    b.wake.push({ x: b.x - fx * 9 + sx, y: b.y - fy * 9 + sy, t: 0 }, { x: b.x - fx * 9 - sx, y: b.y - fy * 9 - sy, t: 0 });
+  }
 
   // --- échouage, bouées ---
   if (env.ground(b.x + fx * 8, b.y + fy * 8)) {

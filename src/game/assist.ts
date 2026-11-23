@@ -4,11 +4,17 @@ import { clamp, D } from '../util/math';
 import { bestConfig, type Calibration } from '../physics/model';
 import { cmdHead, cmdReef, type Boat } from '../physics/boat';
 
-export interface Assist { sheets: boolean; systems: boolean; sails: boolean }
+export interface Assist {
+  sheets: boolean; systems: boolean; sails: boolean;
+  /** Barre assistée : ← → règlent l'angle au vent, virements et empannages automatiques. */
+  helm?: boolean;
+  /** Indulgent : pas de départ au lof, de chavirage ni d'empannage sauvage. */
+  safe?: boolean;
+}
 export const ASSISTS: Record<string, { label: string; a: Assist }> = {
-  debutant: { label: 'Débutant : tout est automatique sauf la barre', a: { sheets: true, systems: true, sails: true } },
-  equipier: { label: 'Équipier : tu règles les écoutes, tu choisis voiles et ris', a: { sheets: false, systems: true, sails: false } },
-  skipper: { label: 'Skipper : tout à la main (quille, foils, ballasts…)', a: { sheets: false, systems: false, sails: false } },
+  debutant: { label: 'Débutant : tu barres, le reste est automatique', a: { sheets: true, systems: true, sails: true, helm: true, safe: true } },
+  equipier: { label: 'Équipier : tu règles aussi les voiles', a: { sheets: false, systems: true, sails: false, safe: true } },
+  skipper: { label: 'Skipper : tout à la main', a: { sheets: false, systems: false, sails: false } },
 };
 
 export interface AssistMem { headSince: number; headWant: number; reefSince: number; reefWant: number; sysT: number }
