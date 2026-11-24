@@ -1,7 +1,7 @@
 // État d'une régate : bateaux, vent, chrono, parcours, classement. Pas fixe, déterministe à graine égale.
 import { D, clamp, makeRng, rrange, type Rng } from '../util/math';
 import { WindField, METEO, type Meteo } from '../physics/wind';
-import { waveH, WV } from '../physics/waves';
+import { waveH, WV, SEAS, setSwell } from '../physics/waves';
 import { IMOCA, type BoatClass } from '../physics/classes';
 import { calibration, bestConfig, type Calibration } from '../physics/model';
 import { islandAt } from '../physics/world';
@@ -43,6 +43,10 @@ export interface GameOpts {
   course?: string;
   /** Ciel : auto, soleil, nuageux, pluie, brume, couchant. */
   sky?: string;
+  /** État de mer : auto, plate, belle, formee, grosse. */
+  sea?: string;
+  /** Collisions entre bateaux (par défaut oui). */
+  collisions?: boolean;
   assist?: Assist;
   name?: string;
   col?: string;
@@ -74,7 +78,10 @@ export class Game {
   readonly venue: Venue;
   readonly sky: string;
   /** Amplitude de la houle (météo × plan d'eau). */
-  readonly waveAmp: number;
+  waveAmp: number;
+  /** État de mer choisi (auto = selon la météo et le vent), collisions entre bateaux. */
+  readonly sea: string;
+  readonly collisions: boolean;
   readonly cls: BoatClass;
   readonly cal: Calibration;
   assist: Assist;
@@ -122,7 +129,10 @@ export class Game {
     this.venue = vc.venue;
     this.course = vc.courses.find(c => c.id === o.course) ?? vc.courses[0];
     this.wind = new WindField(this.seed, this.met, this.venue.shifts, this.venue.gusts);
-    this.waveAmp = this.met.amp * this.venue.waves;
+    this.sea = o.sea && SEAS[o.sea] ? o.sea : 'auto';
+    this.collisions = o.collisions ?? true;
+    setSwell(this.venue.swell ?? 0);
+    this.waveAmp = this.seaAmp(o.startT ?? -PRE);
     this.sky = o.sky && o.sky !== 'auto' ? o.sky : (this.met.sky ?? 'soleil');
     this.cls = o.cls ?? IMOCA;
     this.cal = calibration(this.cls);
@@ -239,6 +249,8 @@ export class Game {
     const t = this.t;
     this.wd = this.wind.dir(t);
     this.env.wd = this.wd;
+    // la mer suit le vent (lentement) : elle grossit quand ça forcit, se calme quand ça mollit
+    this.waveAmp += (this.seaAmp(t) - this.waveAmp) * Math.min(1, dt / 40);
     if (!this.demo && t < 0 && t > -10.5 && Math.ceil(t) !== Math.ceil(this.lastT)) this.onSfx('tick');
     if (this.lastT < 0 && t >= 0) {
       for (const b of this.boats) if (b.y < 0) { b.ocs = true; b.leg = 0; }
@@ -327,6 +339,13 @@ export class Game {
     return { ...input, helm: 0 };
   }
 
+  /** Amplitude de houle visée : état de mer choisi, ou selon la météo et la force du vent du moment. */
+  private seaAmp(t: number): number {
+    const k = SEAS[this.sea]?.k, v = this.venue.waves;
+    if (k != null) return k * (this.venue.id === 'lac' ? Math.min(1, k) : 1);
+    return this.met.amp * v * Math.pow(Math.max(0.3, this.wind.base(t) / this.met.base), 1.6);
+  }
+
   /** Repasse en temps réel près des moments importants. */
   private autoSlow(): void {
     if (this.timeScale === 1) return;
@@ -378,6 +397,7 @@ export class Game {
   }
 
   private collide(): void {
+    if (!this.collisions) return;
     const L = this.boats, R = 16;
     for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
       const a = L[i], b = L[j], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);

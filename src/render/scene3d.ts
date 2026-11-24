@@ -2,7 +2,7 @@
 // bouées, IMOCA (carène, quille pendulaire, foils, safrans, voiles d'avant interchangeables, ris), skipper.
 import * as T from 'three';
 import { D, TAU, clamp, norm } from '../util/math';
-import { WV, waveH } from '../physics/waves';
+import { WV, waveH, SWELL } from '../physics/waves';
 import { ISLANDS, shoreR, islandHeight } from '../physics/world';
 import type { Game } from '../game/game';
 import type { Boat } from '../physics/boat';
@@ -15,6 +15,7 @@ import { HZ, HW, deckY, MAST_Z, DECK, WINCHES, TRAV_T, EXT_L, buildImoca, mainTe
 import { Rope, braidTex } from './rope';
 import { Decor } from './decor';
 import { Skipper } from './skipper';
+import { raceMark, lineTower, FloatLine, palette } from './marks';
 
 const NU = 12, NV = 22;
 
@@ -46,6 +47,7 @@ export class Scene3D {
   private gData: Uint8Array; private gTex: T.DataTexture;
   private marks3: T.Object3D[] = [];
   private markGame: Game['course'] | null = null;
+  private towers: T.Group[] = []; private floats = new FloatLine(36);
   private pin3: T.Group; private cb = new T.Group(); private flagM: T.MeshBasicMaterial;
   private ring: T.Mesh<T.RingGeometry, T.MeshBasicMaterial>;
   private line: T.Line<T.BufferGeometry, T.LineDashedMaterial>;
@@ -160,17 +162,17 @@ export class Scene3D {
     this.gTex.magFilter = T.LinearFilter; this.gTex.minFilter = T.LinearFilter; this.gTex.needsUpdate = true;
     const waves = WV.map(([A, dx, dz, k, st]) => {
       const Q = st / (k * A), w = Math.sqrt(9.8 * k);
-      return `{float ph=${f(k)}*dot(vec2(${f(dx)},${f(dz)}),p0)-t*${f(w)};float c=cos(ph),s=sin(ph);P.x+=a*${f(Q * A * dx)}*c;P.z+=a*${f(Q * A * dz)}*c;P.y+=a*${f(A)}*s;N.x-=a*${f(dx * k * A)}*c;N.z-=a*${f(dz * k * A)}*c;N.y-=a*${f(st)}*s;J-=a*${f(st)}*s;}`;
+      return `{vec2 d=Rw*vec2(${f(dx)},${f(dz)});float ph=${f(k)}*dot(d,p0)-t*${f(w)};float c=cos(ph),s=sin(ph);P.x+=a*${f(Q * A)}*d.x*c;P.z+=a*${f(Q * A)}*d.y*c;P.y+=a*${f(A)}*s;N.x-=a*${f(k * A)}*d.x*c;N.z-=a*${f(k * A)}*d.y*c;N.y-=a*${f(st)}*s;J-=a*${f(st)}*s;}`;
     }).join('');
-    this.wU = { amp: { value: 1 }, t: { value: 0 }, off: { value: new T.Vector2() }, sun: { value: sunDir }, gT: { value: this.gTex }, gC: { value: new T.Vector2() }, gS: { value: this.gS }, fogC: { value: FOG }, isl: { value: Array.from({ length: 16 }, () => new T.Vector4(1e7, 1e7, 1, 0)) }, nIsl: { value: 0 }, deepC: { value: new T.Vector3(0.02, 0.17, 0.28) }, skyLo: { value: new T.Vector3(0.76, 0.86, 0.92) }, skyHi: { value: new T.Vector3(0.3, 0.53, 0.78) } };
+    this.wU = { rot: { value: new T.Vector2(1, 0) }, chop: { value: 1 }, amp: { value: 1 }, t: { value: 0 }, off: { value: new T.Vector2() }, sun: { value: sunDir }, gT: { value: this.gTex }, gC: { value: new T.Vector2() }, gS: { value: this.gS }, fogC: { value: FOG }, isl: { value: Array.from({ length: 16 }, () => new T.Vector4(1e7, 1e7, 1, 0)) }, nIsl: { value: 0 }, deepC: { value: new T.Vector3(0.02, 0.17, 0.28) }, skyLo: { value: new T.Vector3(0.76, 0.86, 0.92) }, skyHi: { value: new T.Vector3(0.3, 0.53, 0.78) } };
     const water = new T.Mesh(this.radialGrid(150, 256, 12000), new T.ShaderMaterial({
       uniforms: this.wU,
-      vertexShader: 'uniform float t,amp;uniform vec2 off;varying vec3 vW;varying vec3 vN;varying float vJ;void main(){vec2 p0=position.xz+off;float a=amp*(1.-smoothstep(900.,2600.,length(position.xz)));vec3 P=vec3(p0.x,0.,p0.y);vec3 N=vec3(0.,1.,0.);float J=1.;' + waves + 'vN=normalize(N);vJ=J;vW=P;gl_Position=projectionMatrix*viewMatrix*vec4(P,1.);}',
-      fragmentShader: `uniform vec3 sun,fogC;uniform float t,gS;uniform sampler2D gT;uniform vec2 gC;uniform vec4 isl[16];uniform int nIsl;uniform vec3 deepC,skyLo,skyHi;varying vec3 vW,vN;varying float vJ;
+      vertexShader: 'uniform float t,amp;uniform vec2 off,rot;varying vec3 vW;varying vec3 vN;varying float vJ;void main(){mat2 Rw=mat2(rot.x,rot.y,-rot.y,rot.x);vec2 p0=position.xz+off;float a=amp*(1.-smoothstep(900.,2600.,length(position.xz)));vec3 P=vec3(p0.x,0.,p0.y);vec3 N=vec3(0.,1.,0.);float J=1.;' + waves + 'vN=normalize(N);vJ=J;vW=P;gl_Position=projectionMatrix*viewMatrix*vec4(P,1.);}',
+      fragmentShader: `uniform vec3 sun,fogC;uniform float t,gS,chop;uniform sampler2D gT;uniform vec2 gC;uniform vec4 isl[16];uniform int nIsl;uniform vec3 deepC,skyLo,skyHi;varying vec3 vW,vN;varying float vJ;
 float hs(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float vn(vec2 p){vec2 i=floor(p),q=fract(p);q=q*q*(3.-2.*q);return mix(mix(hs(i),hs(i+vec2(1.,0.)),q.x),mix(hs(i+vec2(0.,1.)),hs(i+vec2(1.,1.)),q.x),q.y);}
 void main(){float d=length(cameraPosition.xz-vW.xz);float fd=1.-smoothstep(40.,500.,d);
-vec2 uv=(vW.xz-gC)/gS+.5;float g=texture2D(gT,uv).r*(1.-smoothstep(1500.,2000.,d));float r=(1.+g*2.)*fd;
+vec2 uv=(vW.xz-gC)/gS+.5;float g=texture2D(gT,uv).r*(1.-smoothstep(1500.,2000.,d));float r=(chop+g*2.)*fd;
 vec3 n=normalize(vN+r*vec3(sin(vW.x*1.7+t*2.1)*.03+sin(vW.z*3.1-vW.x*.7-t*2.9)*.022+(vn(vW.xz*1.3+t*.6)-.5)*.07,0.,cos(vW.z*1.9+t*1.6)*.03+sin(vW.x*2.7+vW.z*1.3+t*3.3)*.018+(vn(vW.zx*1.1-t*.5)-.5)*.07));
 vec3 V=normalize(cameraPosition-vW);float fr=.02+.98*pow(1.-max(dot(n,V),0.),5.);
 vec3 R=reflect(-V,n);float sk=clamp(R.y,0.,1.);vec3 skyc=mix(skyLo,skyHi,pow(sk,.5));
@@ -359,13 +361,29 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     this.marks3 = c.marks.map(m => {
       const side = m.side === 'port' ? 'à bâbord' : 'à tribord';
       let o: T.Object3D;
+      const [col, col2] = palette(c.id), num = String(c.marks.indexOf(m) + 1);
       if (m.island != null) {
-        o = new T.Group(); const sp = this.label(m.name + ' · ' + side, 'rgba(255,106,31,.9)'); sp.position.y = ISLANDS[m.island].h + 40; o.add(sp);
-        o.position.set(m.x, 0, m.y);
-      } else { o = this.mkBuoy('#ff6a1f', 1.4, m.name + ' · ' + side); o.position.set(m.x, 0, m.y); }
+        // île : une grande bouée de dégagement au large de la pointe, à contourner avec l'île
+        const isl = ISLANDS[m.island], w = m.wp[1], th = Math.atan2(w.y - m.y, w.x - m.x), r0 = shoreR(isl, th);
+        const d = Math.hypot(w.x - m.x, w.y - m.y), k = (r0 + (d - r0) * 0.45) / d;
+        o = raceMark(col, col2, num); o.scale.setScalar(1.8); o.position.set(m.x + (w.x - m.x) * k, 0, m.y + (w.y - m.y) * k);
+        const sp = this.label(m.name + ' · ' + side, 'rgba(255,106,31,.9)'); sp.position.y = 9; sp.scale.set(0.2, 0.025, 1); o.add(sp);
+      } else {
+        o = raceMark(col, col2, num); o.scale.setScalar(1.2); o.position.set(m.x, 0, m.y);
+        const sp = this.label(m.name + ' · ' + side, 'rgba(255,106,31,.9)'); sp.position.y = 11; sp.scale.set(0.2, 0.025, 1); o.add(sp);
+      }
+      { const fl = this.glowSprite('#ffe27a', 0.035); fl.position.y = 9; fl.visible = false; o.add(fl); o.userData.flash = fl; }
       this.scene.add(o); return o;
     });
     this.pin3.position.set(c.pin.x, 0, c.pin.y); this.cb.position.set(c.cmte.x + 4, 0, c.cmte.y);
+    // tours DÉPART / ARRIVÉE et ligne de flotteurs aux couleurs du parcours
+    for (const t of this.towers) this.scene.remove(t);
+    const [col] = palette(c.id);
+    this.towers = [lineTower(col), lineTower(col)]; for (const t of this.towers) t.scale.setScalar(1.6);
+    this.towers[0].position.set(c.pin.x - 14, 0, c.pin.y); this.towers[1].position.set(c.cmte.x + 26, 0, c.cmte.y);
+    for (const t of this.towers) this.scene.add(t);
+    this.floats.set({ x: c.pin.x + 6, y: c.pin.y }, { x: c.cmte.x - 6, y: c.cmte.y }, col);
+    if (!this.floats.mesh.parent) this.scene.add(this.floats.mesh);
     this.markGame = c;
   }
 
@@ -731,6 +749,8 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
 
   render(g: Game, boats: Boat[], me: Boat, dt: number, rt: number, view: 'pov' | 'chase' | 'tv'): void {
     this.rt = rt; this.amp = g.waveAmp;
+    (this.wU.rot.value as T.Vector2).set(SWELL.c, SWELL.s);
+    this.wU.chop.value = clamp(0.35 + me.tws / 16, 0.35, 2.2);
     if (g.venue.id !== this.venueId) this.setVenue(g);
     if (g.sky !== this.skyId) this.setSky(g.sky);
     this.setCourse(g.course);
@@ -815,8 +835,10 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       }
       this.gTex.needsUpdate = true;
     }
-    g.course.marks.forEach((m, i) => { if (m.island == null) { const o = this.marks3[i]; o.position.y = this.wh(m.x, m.y) * 0.8 - 0.2; o.rotation.z = Math.sin(tm * 1.3 + i) * 0.08; } });
+    this.marks3.forEach((o, i) => { o.position.y = this.wh(o.position.x, o.position.z) * 0.8 - 0.2; o.rotation.z = Math.sin(tm * 1.3 + i) * 0.06; o.rotation.x = Math.cos(tm * 1.1 + i) * 0.05; });
     this.pin3.position.y = this.wh(this.pin3.position.x, 0) * 0.8 - 0.2;
+    for (const t of this.towers) { t.position.y = this.wh(t.position.x, t.position.z) * 0.8 - 0.2; t.rotation.z = Math.sin(tm * 1.1 + t.position.x) * 0.05; }
+    this.floats.update((x, z) => this.wh(x, z), 1);
     this.cb.position.y = this.wh(this.cb.position.x, 0) * 0.5; this.cb.rotation.z = Math.sin(tm * 0.9) * 0.03;
     const nm = !g.demo && !me.ocs && me.leg >= 1 && me.leg <= g.course.marks.length ? g.course.marks[me.leg - 1] : null;
     this.ring.visible = !!nm && nm.island == null;

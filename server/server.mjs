@@ -64,7 +64,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
   }
   function create(c, isPublic) {
     const r = { code: code(), public: !!isPublic, name: 'Salon de ' + c.name, host: c.id, phase: 'lobby', players: new Map(),
-      settings: { venue: 'baie', course: 'sprint', met: 1, sky: 'auto', pace: 3 }, seed: 0, gunAt: 0, firstFin: 0 };
+      settings: { venue: 'baie', course: 'sprint', met: 1, sky: 'auto', pace: 3, sea: 'auto', collisions: true }, seed: 0, gunAt: 0, firstFin: 0 };
     rooms.set(r.code, r); log(`salon ${r.code} créé par ${c.name}`);
     joinRoom(c, r);
   }
@@ -94,7 +94,8 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
           if (r && r.host === c.id && r.phase === 'lobby' && m.settings) {
             const s = m.settings, o = r.settings;
             r.settings = { venue: String(s.venue ?? o.venue).slice(0, 20), course: String(s.course ?? o.course).slice(0, 20), met: Math.max(0, Math.min(4, Number(s.met ?? o.met) | 0)),
-              sky: String(s.sky ?? o.sky).slice(0, 12), pace: [1, 2, 3].includes(Number(s.pace)) ? Number(s.pace) : o.pace };
+              sky: String(s.sky ?? o.sky).slice(0, 12), pace: [1, 2, 3].includes(Number(s.pace)) ? Number(s.pace) : o.pace,
+              sea: ['auto', 'plate', 'belle', 'formee', 'grosse'].includes(s.sea) ? s.sea : o.sea, collisions: typeof s.collisions === 'boolean' ? s.collisions : o.collisions };
             broadcast(r, roomInfo(r));
           }
           break;

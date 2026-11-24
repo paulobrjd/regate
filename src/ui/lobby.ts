@@ -50,9 +50,10 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
       c[2].textContent = p.id === r.host ? 'hôte' : '';
     });
     const host = isHost();
-    for (const id of ['nVenue', 'nCourse', 'nMet', 'nSky', 'nPace']) sel(id).disabled = !host;
+    for (const id of ['nVenue', 'nCourse', 'nMet', 'nSky', 'nPace', 'nSea']) sel(id).disabled = !host;
+    $<HTMLInputElement>('nNoColl').disabled = !host;
     const st = r.settings;
-    sel('nVenue').value = st.venue; fillCourses(st.venue, st.course); sel('nMet').value = String(st.met); sel('nSky').value = st.sky; sel('nPace').value = String(st.pace);
+    sel('nVenue').value = st.venue; fillCourses(st.venue, st.course); sel('nMet').value = String(st.met); sel('nSky').value = st.sky; sel('nPace').value = String(st.pace); sel('nSea').value = st.sea ?? 'auto'; $<HTMLInputElement>('nNoColl').checked = st.collisions === false;
     $('netStart').hidden = !host;
     $('netHint').textContent = r.phase === 'race' ? 'Course en cours…' : host
       ? (r.players.length < 2 ? 'Envoie le code (ou le lien) à tes potes. Tu peux aussi lancer seul pour essayer.' : 'Tout le monde est là ? Lance la course : le départ est donné 1 minute de jeu plus tard.')
@@ -80,9 +81,10 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     try { await navigator.clipboard.writeText(url); $('netCopy').textContent = 'Lien copié !'; } catch { $('netCopy').textContent = url; }
     setTimeout(() => { $('netCopy').textContent = 'Copier le lien'; }, 2500);
   };
-  const pushSettings = () => { if (isHost()) net.send({ type: 'settings', settings: { venue: sel('nVenue').value, course: sel('nCourse').value, met: +sel('nMet').value, sky: sel('nSky').value, pace: +sel('nPace').value } }); };
+  const pushSettings = () => { if (isHost()) net.send({ type: 'settings', settings: { venue: sel('nVenue').value, course: sel('nCourse').value, met: +sel('nMet').value, sky: sel('nSky').value, pace: +sel('nPace').value, sea: sel('nSea').value, collisions: !$<HTMLInputElement>('nNoColl').checked } }); };
   sel('nVenue').onchange = () => { fillCourses(sel('nVenue').value); pushSettings(); };
-  for (const id of ['nCourse', 'nMet', 'nSky', 'nPace']) sel(id).onchange = pushSettings;
+  for (const id of ['nCourse', 'nMet', 'nSky', 'nPace', 'nSea']) sel(id).onchange = pushSettings;
+  $('nNoColl').onchange = pushSettings;
 
   // lien d'invitation : ?salon=ABCD
   const invite = new URLSearchParams(location.search).get('salon');

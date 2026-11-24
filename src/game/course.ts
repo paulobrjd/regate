@@ -47,7 +47,7 @@ export function build(id: string, name: string, desc: string, defs: MarkDef[]): 
     const out = Math.hypot(bx, by) > 0.3 ? unit(bx, by) : perp(unit(dirIn.x + dirOut.x, dirIn.y + dirOut.y));
     const isl = m.island != null ? ISLANDS[m.island] : null;
     const rad = isl ? shoreR(isl, Math.atan2(out.y, out.x)) : 0;
-    const clear = isl ? rad * 0.25 + 450 : MARK_CLEAR;
+    const clear = isl ? rad * 0.4 + 500 : MARK_CLEAR;
     const base = isl ? rad : 0;
     const at = (d: Pt, k: number): Pt => {
       const th = Math.atan2(d.y, d.x), r0 = isl ? shoreR(isl, th) : 0;

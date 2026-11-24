@@ -175,7 +175,9 @@ function pilotRudder(b: Boat, wd: number): number {
   const twa = norm(b.h - wd), twaT = norm(hd - wd);
   const viaWind = Math.sign(twa) !== Math.sign(twaT) && Math.abs(twa) + Math.abs(twaT) < Math.PI;
   if (viaWind && b.v < 2.5 && Math.abs(err) > 0.6) err = err - Math.sign(err) * 2 * Math.PI;
-  return clamp(err * 1.6 - b.r * 1.3, -0.45, 0.45);
+  // en marche arrière (bateau face au vent qui recule), la barre agit à l'envers : le pilote l'inverse pour abattre
+  const sgn = b.v < -0.15 ? -1 : 1;
+  return clamp(sgn * (err * 1.6 - b.r * 1.3 * sgn), -0.45, 0.45);
 }
 
 const approach = (v: number, t: number, rate: number) => v + clamp(t - v, -rate, rate);

@@ -72,10 +72,14 @@
           <label class="field">Ciel
             <select id="sky"><option value="auto">Selon la météo</option><option value="soleil">Grand soleil</option><option value="nuageux">Nuageux</option><option value="pluie">Pluie</option><option value="brume">Brume</option><option value="couchant">Coucher de soleil</option><option value="nuit">Nuit</option></select>
           </label>
+          <label class="field">Mer
+            <select id="sea"><option value="auto">Selon la météo</option><option value="plate">Mer plate</option><option value="belle">Belle mer</option><option value="formee">Mer formée</option><option value="grosse">Grosse mer</option></select>
+          </label>
           <label class="field">Rythme
             <select id="pace"><option value="3" selected>Arcade (rapide)</option><option value="2">Dynamique</option><option value="1">Réaliste (temps réel)</option></select>
           </label>
         </div>
+        <label class="chk"><input type="checkbox" id="noColl"> Sans collision (les bateaux se traversent)</label>
         <div class="row">
           <button class="go" id="goBtn">Larguer les amarres</button>
           <button class="opt" id="resumeBtn" hidden>Reprendre la course</button>
@@ -99,8 +103,10 @@
           <div class="row">
             <label class="field">Météo<select id="nMet"><option value="0">Petit temps</option><option value="1">Medium</option><option value="2">Brise</option><option value="3">Gros temps</option><option value="4">Variable · grains</option></select></label>
             <label class="field">Ciel<select id="nSky"><option value="auto">Selon la météo</option><option value="soleil">Grand soleil</option><option value="nuageux">Nuageux</option><option value="pluie">Pluie</option><option value="brume">Brume</option><option value="couchant">Coucher de soleil</option><option value="nuit">Nuit</option></select></label>
+            <label class="field">Mer<select id="nSea"><option value="auto">Selon la météo</option><option value="plate">Mer plate</option><option value="belle">Belle mer</option><option value="formee">Mer formée</option><option value="grosse">Grosse mer</option></select></label>
             <label class="field">Rythme<select id="nPace"><option value="3">Arcade</option><option value="2">Dynamique</option><option value="1">Réaliste</option></select></label>
           </div>
+          <label class="chk"><input type="checkbox" id="nNoColl"> Sans collision</label>
           <div class="row"><label class="field">Ton assistance<select id="nAssist"></select></label></div>
           <div class="row"><button class="go" id="netStart">Lancer la course</button><button class="opt" id="netLeave">Quitter le salon</button></div>
           <p class="note" id="netHint"></p>

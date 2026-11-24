@@ -1,6 +1,6 @@
 // Client multijoueur : connexion WebSocket au serveur, synchronisation d'horloge, messages des salons.
 export interface RoomPlayer { id: string; name: string; col: string }
-export interface RoomSettings { venue: string; course: string; met: number; sky: string; pace: number }
+export interface RoomSettings { venue: string; course: string; met: number; sky: string; pace: number; sea?: string; collisions?: boolean }
 export interface RoomInfo { code: string; public: boolean; host: string; phase: 'lobby' | 'race'; settings: RoomSettings; players: RoomPlayer[] }
 export interface StartMsg { seed: number; gunAt: number; settings: RoomSettings; players: RoomPlayer[] }
 export interface ResultRow { id: string; name: string; col: string; fin: number | null; leg: number; d: number; ocs: boolean }

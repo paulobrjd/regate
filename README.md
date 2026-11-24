@@ -32,6 +32,8 @@ En développement (`npm run dev`), lance aussi `npm run serveur` dans un autre t
 - **Archipel des Fous** : slalom entre une dizaine d'îlots.
 - **Lac des Cimes** : lac de montagne, eau plate, vent qui tourne sans arrêt.
 
+État de la mer au choix (plate, belle, formée, grosse, ou selon la météo : la houle suit alors la force du vent et grossit dans les risées durables), option **Sans collision** (les bateaux se traversent).
+
 Météo au choix, dont **Variable** (le vent forcit et mollit, des grains passent avec rafales et pluie), et ciel au choix :
 soleil, nuageux, pluie, brume, coucher de soleil, **nuit** (feux de navigation, phares, étoiles).
 
