@@ -17,7 +17,26 @@ import { Decor } from './decor';
 import { Skipper } from './skipper';
 import { raceMark, lineTower, FloatLine, palette } from './marks';
 
-const NU = 12, NV = 22;
+const NU = 14, NV = 24;
+
+/** Ligne moyenne d'un profil d'aile (NACA 4 chiffres), normalisée à 1 au creux maximal situé en p. */
+function camberLine(u: number, p: number): number {
+  return u < p ? (2 * p * u - u * u) / (p * p) : ((1 - 2 * p) + 2 * p * u - u * u) / ((1 - p) * (1 - p));
+}
+
+/**
+ * Géométrie des voiles d'avant (m) : recul du point d'amure, hauteur de tête, longueur de bordure, hauteur du
+ * point d'écoute, report latéral, creux (fraction de la corde), position du creux, vrillage (rad), flèche de
+ * guindant, avancée du guindant, rond/creux de chute, rond de bordure, répartition de la chute.
+ */
+interface SailGeo { tz: number; head: number; foot: number; clewH: number; out: number; camber: number; draft: number; twist: number; sag: number; luffFwd: number; leech: number; footRound: number; leechPow: number }
+const SAILS: Record<string, SailGeo> = {
+  J1: { tz: 0.1, head: 24.8, foot: 7.6, clewH: 0.45, out: 1, camber: 0.11, draft: 0.38, twist: 0.2, sag: 0.35, luffFwd: 0, leech: -0.015, footRound: 0.35, leechPow: 1 },
+  J2: { tz: 0.3, head: 22.5, foot: 6.4, clewH: 0.9, out: 1, camber: 0.1, draft: 0.38, twist: 0.2, sag: 0.28, luffFwd: 0, leech: -0.02, footRound: 0.25, leechPow: 1 },
+  J3: { tz: 2.6, head: 17.3, foot: 4.5, clewH: 1.5, out: 1, camber: 0.09, draft: 0.4, twist: 0.18, sag: 0.18, luffFwd: 0, leech: 0, footRound: 0.15, leechPow: 1 },
+  C0: { tz: -2.3, head: 28.3, foot: 10.5, clewH: 1.1, out: 1, camber: 0.07, draft: 0.33, twist: 0.32, sag: 0.08, luffFwd: 0, leech: 0.03, footRound: 0.3, leechPow: 0.9 },
+  A3: { tz: -2.3, head: 28.3, foot: 13, clewH: 2.3, out: 1.15, camber: 0.2, draft: 0.46, twist: 0.38, sag: 1.6, luffFwd: 1.8, leech: 0.12, footRound: 1.1, leechPow: 0.75 },
+};
 
 interface Rec {
   yaw: T.Group; roll: T.Group; boomG: T.Group; mast: T.Mesh; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[];
@@ -32,6 +51,7 @@ interface Rec {
   /** Main qui tient le mou de l'écoute (coordonnées du pont), quand le skipper reprend un bout. */
   tailHand: T.Vector3 | null;
   /** Voiles vivantes : bôme sur ressort amorti, faseyement progressif, creux qui respire. */
+  lod?: number;
   sail: { boom: number; boomV: number; luffM: number; luffH: number; breath: number; side: number };
   lb: T.Sprite; name: string; heel: number; used: boolean; sideS?: number; prevS?: number; headId: string;
 }
@@ -398,7 +418,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
   private headTexs = new Map<string, T.CanvasTexture>();
   private headMap(id: string, col: string): T.CanvasTexture {
     const k = id + col; let t = this.headTexs.get(k);
-    if (!t) { t = headTex(id === 'A3' ? col : id === 'C0' ? '#d4d9dc' : '#7d868c', col, id === 'A3'); this.headTexs.set(k, t); }
+    if (!t) { t = headTex(id, col); this.headTexs.set(k, t); }
     return t;
   }
 
@@ -437,8 +457,8 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       const twist = 0.22 * v * v;
       const batten = 0.35 + 0.65 * Math.abs(Math.sin(Math.PI * v * 9)); // les lattes raidissent la toile
       for (let i = 0; i <= NU; i++) {
-        const u = i / NU, bulge = 4 * u * (1 - u) * (1 - 0.35 * u);
-        let x = side * camber * ch * 0.13 * bulge * (1 - v * 0.25) + side * u * ch * twist;
+        const u = i / NU, bulge = camberLine(u, 0.45 - 0.06 * v) * (1 - 0.15 * u * u);
+        let x = side * camber * ch * 0.14 * bulge * (1 - v * 0.2) * (0.85 + 0.3 * Math.sin(Math.PI * Math.min(1, v * 1.3))) + side * u * ch * twist;
         // ondulation qui court du guindant vers la chute, plus forte sur la chute
         x += Math.sin(tm * speed - u * 7 + v * 4) * flut * Math.pow(u, 1.6) * batten + Math.sin(tm * speed * 1.7 - u * 13) * flut * 0.3 * Math.pow(u, 3);
         p[k++] = x; p[k++] = v * h + 0.05; p[k++] = u * ch - 0.1 * Math.sin(Math.PI * v) ;
@@ -447,26 +467,42 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     g.attributes.position.needsUpdate = true; g.computeVertexNormals(); g.computeBoundingSphere();
   }
 
-  /** Voile d'avant : point d'amure, tête, point d'écoute selon l'angle d'écoute delta (°). */
+  /**
+   * Voile d'avant : surface construite comme une vraie voile. Pour chaque hauteur, une corde du guindant à la
+   * chute, creusée selon un profil d'aile (creux maximal vers l'avant), avec vrillage vers le haut, flèche du
+   * guindant (étai qui « tombe » sous le vent), rond de bordure et chute creuse ou ronde. Chaque voile a sa forme.
+   */
   private setHead(r: Rec, b: Boat, side: number, delta: number, pow: number, luff: number, tm: number): void {
-    const s = b.cls.heads[b.head], id = s.id;
-    const geo = { J1: [0.1, 24.8, 7.4, 0.5, 0.11], J2: [0.3, 22.5, 6.4, 0.9, 0.1], J3: [2.6, 17.3, 4.6, 1.4, 0.09], C0: [-2.3, 28.3, 10, 0.9, 0.09], A3: [-2.3, 28.3, 12.5, 1.4, 0.3] }[id] ?? [0, 25, 7, 1.3, 0.1];
-    const [tz, hh, foot, clewH, belly] = geo;
+    const s = b.cls.heads[b.head], id = s.id, G = SAILS[id] ?? SAILS.J1;
     const { A, B, C, P, Q, R } = this;
-    A.set(0, deckY(0, 0) + 0.25, HZ(0) + tz); B.set(0, DECK + hh, MAST_Z - 0.5);
-    // le point d'écoute s'éloigne vers sous le vent avec l'angle d'écoute ; affalée (pow→0) : roulée sur l'étai
-    const dRad = delta * D, len = foot * (0.15 + 0.85 * pow);
-    C.set(side * Math.sin(dRad) * len, A.y + clewH, A.z + Math.cos(dRad) * len);
+    A.set(0, deckY(0, 0) + 0.25, HZ(0) + G.tz); B.set(0, DECK + G.head, MAST_Z - 0.5);
+    // point d'écoute : s'éloigne sous le vent avec l'angle d'écoute ; affalée (pow→0) : roulée sur l'étai
+    const dRad = delta * D, len = G.foot * (0.12 + 0.88 * pow);
+    C.set(side * Math.sin(dRad) * len * G.out, A.y + G.clewH, A.z + Math.cos(dRad) * len);
     const p = (r.hg.attributes.position as T.BufferAttribute).array as Float32Array; let k = 0;
-    const isGen = id === 'A3';
+    const cam = G.camber * (1 - 0.75 * luff) * (0.6 + 0.4 * pow), amp = 0.012 + luff * 0.26;
     for (let j = 0; j <= NV; j++) {
-      const v = j / NV; P.lerpVectors(A, B, v); Q.lerpVectors(C, B, v);
+      const v = j / NV;
+      // guindant (avec flèche) et chute (vrillée, ronde ou creuse) à cette hauteur
+      P.lerpVectors(A, B, v);
+      const sag = G.sag * Math.sin(Math.PI * v);
+      P.x += side * sag * (1 - luff * 0.5); P.z -= G.luffFwd * Math.sin(Math.PI * v);
+      Q.lerpVectors(C, B, Math.pow(v, G.leechPow));
+      const tw = G.twist * Math.pow(v, 1.4) * (1 + luff);
+      const qx = Q.x - P.x, qz = Q.z - P.z, ct = Math.cos(tw * side), st = Math.sin(tw * side);
+      Q.x = P.x + qx * ct + qz * st; Q.z = P.z - qx * st + qz * ct; // la chute s'ouvre vers le haut
+      const chord = Math.hypot(Q.x - P.x, Q.z - P.z, Q.y - P.y) || 1;
+      // normale à la corde dans le plan horizontal, orientée sous le vent
+      let nx = Q.z - P.z, nz = -(Q.x - P.x); const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl; if (nx * side < 0) { nx = -nx; nz = -nz; }
+      const depth = chord * cam * (0.75 + 0.5 * Math.sin(Math.PI * Math.min(1, v * 1.15))) * (1 - 0.35 * v * v), draft = G.draft + 0.06 * v;
       for (let i = 0; i <= NU; i++) {
         const u = i / NU; R.lerpVectors(P, Q, u);
-        const bl = Math.sin(Math.PI * u) * Math.sin(Math.PI * Math.min(1, v * 1.02 + 0.03)) * belly * len * (isGen ? 1 : 1 - v * 0.5);
-        const amp = 0.015 + luff * 0.28, fx = Math.sin(tm * (18 + luff * 10) - u * 8 + v * 5) * amp * (0.3 + u) * (1 - v * 0.7);
-        const curl = luff * 0.5 * Math.sin(Math.PI * v) * Math.pow(1 - u, 3); // le guindant se creuse (contre-gîte)
-        R.x += side * (bl * (1 - 0.8 * luff) + fx * (isGen ? 2 : 1) - curl); if (isGen) R.z -= bl * 0.6 * (1 - 0.6 * luff);
+        let y = depth * camberLine(u, draft);
+        y += G.leech * chord * Math.sin(Math.PI * v) * Math.pow(u, 6); // rond (ou creux) de chute
+        const fx = Math.sin(tm * (18 + luff * 10) - u * 8 + v * 5) * amp * (0.25 + u) * (1 - v * 0.6);
+        const curl = luff * 0.45 * Math.sin(Math.PI * v) * Math.pow(1 - u, 3); // le guindant se creuse quand ça faseye
+        R.x += nx * (y + fx) - side * curl; R.z += nz * (y + fx);
+        R.y -= G.footRound * Math.sin(Math.PI * u) * Math.pow(1 - v, 8); // rond de bordure
         p[k++] = R.x; p[k++] = R.y; p[k++] = R.z;
       }
     }
@@ -534,11 +570,15 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     r.mast.rotation.y = r.boomG.rotation.y * 0.45; // mât-aile pivotant
     const reefH = [27, 23.5, 20, 16.5][b.reefs];
     const camber = (0.6 + 0.5 * clamp(1 - Math.abs(b.mainSheet - b.ideal.mainSheet) * 3, 0, 1)) * (1 - 0.9 * sl.luffM) * sl.breath;
-    this.setMain(r.mg, sl.side * clamp(Math.abs(sl.boom) * 6, 0.15, 1), reefH * (0.6 + 0.4 * b.mainPow), camber, sl.luffM, tm + X, b.aws);
+    // bateaux lointains : voiles, cordages et skipper recalculés une image sur trois (fluidité à 15 bateaux)
+    const camD = isMe ? 0 : Math.hypot(this.cam.position.x - X, this.cam.position.z - Z);
+    r.lod = ((r.lod ?? 0) + 1) % 3;
+    const heavy = camD < 300 || r.lod === 0;
+    if (heavy) this.setMain(r.mg, sl.side * clamp(Math.abs(sl.boom) * 6, 0.15, 1), reefH * (0.6 + 0.4 * b.mainPow), camber, sl.luffM, tm + X, b.aws);
     const head = b.cls.heads[b.head], hd = headAngle(head, b.headSheet);
     const hT = b.knock > 0 || aa < head.awaMin ? 1 : Math.max(clamp((hd + 4 - aa) / 10, 0, 1), 1 - b.headPow);
     sl.luffH += (hT - sl.luffH) * Math.min(1, dt * 3);
-    this.setHead(r, b, ss, hd, b.headPow, sl.luffH, tm + Z);
+    if (heavy) this.setHead(r, b, ss, hd, b.headPow, sl.luffH, tm + Z);
     r.hmesh.visible = b.headPow > 0.02;
     r.keelG.rotation.z = b.keel * b.cls.keelMax * D;
     r.foilP.position.x = -1.2 + (1 - b.foilP) * 2.4;
@@ -547,9 +587,9 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     // chariot de grand-écoute et barres franches
     r.car.position.x = clamp(b.trav, -1, 1) * ss * HW(TRAV_T) * 0.6;
     r.tiller.rotation.y = b.rud * 0.8;
-    r.skipper.root.visible = !(isMe && pov);
-    this.animSkipper(r, b, dt, tack);
-    this.updateRopes(r, b, ss, tm, isMe);
+    r.skipper.root.visible = !(isMe && pov) && camD < 700;
+    if (r.skipper.root.visible && (camD < 150 || heavy)) this.animSkipper(r, b, camD < 150 ? dt : dt * 3, tack);
+    if (heavy) this.updateRopes(r, b, ss, tm, isMe);
     r.lb.visible = !isMe; r.used = true;
     if (isMe && r.hmesh.visible) this.setTells(r, b, ss, tm);
     // embruns

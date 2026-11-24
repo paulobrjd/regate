@@ -392,13 +392,38 @@ export function mainTex(num: string, col: string, name: string): T.CanvasTexture
   x.font = '800 150px "Barlow Condensed", sans-serif'; x.fillText('FRA', 220, 1050); x.font = '800 230px "Barlow Condensed", sans-serif'; x.fillText(num, 220, 1290);
   const t = new T.CanvasTexture(c); t.anisotropy = 4; return t;
 }
-/** Texture de voile d'avant : coutures et laizes. */
-export function headTex(base: string, col: string, gen: boolean): T.CanvasTexture {
-  const c = document.createElement('canvas'); c.width = 256; c.height = 1024; const x = c.getContext('2d')!;
-  x.fillStyle = base; x.fillRect(0, 0, 256, 1024);
-  x.strokeStyle = 'rgba(0,0,0,.12)'; x.lineWidth = 3;
-  for (let k = 1; k < 12; k++) { x.beginPath(); x.moveTo(0, k * 85); x.lineTo(256, k * 85 - 30); x.stroke(); }
-  if (gen) { x.fillStyle = '#fff'; x.beginPath(); x.moveTo(0, 1024); x.quadraticCurveTo(140, 600, 256, 520); x.lineTo(256, 640); x.quadraticCurveTo(150, 720, 0, 1024); x.fill(); }
-  else { x.fillStyle = col; x.fillRect(0, 980, 256, 44); }
-  return new T.CanvasTexture(c);
+/**
+ * Texture de voile d'avant, propre à chaque voile (u = du guindant à la chute, v = du bas vers le haut) :
+ * J1/J2 en membrane 3Di grise, trinquette J3 plus claire avec bande rouge, Code 0 blanc à laizes rayonnantes,
+ * gennaker A3 aux couleurs du bateau avec un grand motif.
+ */
+export function headTex(id: string, col: string): T.CanvasTexture {
+  const W = 512, H = 1024, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d')!;
+  const fibers = (a: string, n: number) => { x.strokeStyle = a; x.lineWidth = 2; for (let i = -n; i < n * 2; i++) { x.beginPath(); x.moveTo(0, H - i * 40); x.quadraticCurveTo(W * 0.5, H * 0.5 - i * 30, W, -i * 25); x.stroke(); } };
+  const radial = (cx: number, cy: number, a: string, n: number) => { x.strokeStyle = a; x.lineWidth = 3; for (let i = 0; i <= n; i++) { const t = i / n; x.beginPath(); x.moveTo(cx, cy); x.lineTo(t * W * 1.4 - W * 0.2, H); x.stroke(); } };
+  const tape = (a: string, w = 18) => { x.fillStyle = a; x.fillRect(0, 0, w, H); x.fillRect(0, H - w, W, w); x.fillRect(W - w * 0.6, 0, w * 0.6, H); }; // guindant, bordure, chute renforcés
+  if (id === 'A3') {
+    x.fillStyle = col; x.fillRect(0, 0, W, H);
+    x.fillStyle = '#ffffff'; x.beginPath(); x.moveTo(0, H * 0.95); x.bezierCurveTo(W * 0.35, H * 0.55, W * 0.7, H * 0.45, W, H * 0.12); x.lineTo(W, H * 0.3); x.bezierCurveTo(W * 0.7, H * 0.6, W * 0.4, H * 0.75, 0, H); x.fill();
+    x.fillStyle = '#1b2328'; x.beginPath(); x.moveTo(0, H * 0.82); x.bezierCurveTo(W * 0.35, H * 0.5, W * 0.65, H * 0.38, W, H * 0.04); x.lineTo(W, H * 0.1); x.bezierCurveTo(W * 0.65, H * 0.45, W * 0.38, H * 0.58, 0, H * 0.88); x.fill();
+    radial(0, 0, 'rgba(0,0,0,.08)', 14); radial(W, H * 0.6, 'rgba(0,0,0,.06)', 10);
+    x.fillStyle = 'rgba(255,255,255,.9)'; x.font = '800 120px "Barlow Condensed", sans-serif'; x.textAlign = 'center'; x.fillText('FRA', W * 0.5, H * 0.32);
+    tape('rgba(0,0,0,.25)', 10);
+  } else if (id === 'C0') {
+    x.fillStyle = '#e8ecee'; x.fillRect(0, 0, W, H);
+    radial(0, 0, 'rgba(60,70,80,.16)', 18); radial(W, H, 'rgba(60,70,80,.1)', 8);
+    x.fillStyle = '#23292e'; x.fillRect(0, 0, 26, H); // bande de protection UV le long du guindant (enroulée)
+    x.fillStyle = col; x.fillRect(W - 40, 0, 40, H);
+    x.fillStyle = 'rgba(30,40,50,.75)'; x.font = '800 90px "Barlow Condensed", sans-serif'; x.textAlign = 'center'; x.fillText('C0', W * 0.6, H * 0.85);
+  } else {
+    const base = id === 'J1' ? '#6f787e' : id === 'J2' ? '#7d878d' : '#c9cfd3';
+    x.fillStyle = base; x.fillRect(0, 0, W, H);
+    fibers(id === 'J3' ? 'rgba(40,50,60,.14)' : 'rgba(255,255,255,.08)', 30);
+    x.strokeStyle = 'rgba(0,0,0,.18)'; x.lineWidth = 3; for (let k = 1; k < 6; k++) { x.beginPath(); x.moveTo(0, H - k * 170); x.lineTo(W, H - k * 170 - 60); x.stroke(); } // coutures
+    tape('rgba(20,25,30,.45)', 14);
+    if (id === 'J3') { x.fillStyle = '#c8371e'; x.fillRect(0, H - 70, W, 50); }
+    else { x.fillStyle = col; x.fillRect(0, H - 50, W, 32); }
+    x.fillStyle = id === 'J3' ? 'rgba(30,40,50,.6)' : 'rgba(255,255,255,.55)'; x.font = '800 110px "Barlow Condensed", sans-serif'; x.textAlign = 'center'; x.fillText(id, W * 0.62, H * 0.78);
+  }
+  const t = new T.CanvasTexture(c); t.anisotropy = 4; return t;
 }

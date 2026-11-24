@@ -24,8 +24,12 @@ export const PRE = 60;
 export const STEP = 1 / 60;
 export const TIME_SCALES = [1, 2, 5, 10, 20, 50];
 
-export const COLS = ['#ffd23f', '#e8384f', '#3ddc97', '#b388ff', '#4cc9f0', '#ff8fab', '#f4a261', '#a3e635'];
-export const BOTS = ['Margot', 'Yann', 'Loïc', 'Armelle', 'Tanguy'];
+export const COLS = ['#ffd23f', '#e8384f', '#3ddc97', '#b388ff', '#4cc9f0', '#ff8fab', '#f4a261', '#a3e635', '#ffffff', '#1f6feb', '#ff6a1f', '#00b3a4', '#c2185b', '#8d6e63', '#2c3e50'];
+export const BOTS = ['Margot', 'Yann', 'Loïc', 'Armelle', 'Tanguy', 'Gwen', 'Erwan', 'Maëlle', 'Ronan', 'Solène', 'Malo', 'Nolwenn', 'Corentin', 'Anouk'];
+/** Nombre maximal de bateaux sur l'eau. */
+export const MAX_BOATS = 15;
+/** Demi-longueur de la ligne de départ (m) : elle s'allonge avec le nombre de bateaux. */
+export const lineHalf = (n: number) => Math.max(260, Math.min(620, 110 + 34 * n));
 
 export type Sfx = 'tick' | 'gun' | 'finish' | 'capsize' | 'gybeWild' | 'mark' | 'winch' | 'ground';
 
@@ -117,6 +121,8 @@ export class Game {
   readonly remotes = new Map<string, Remote>();
   /** Enregistrement de la course pour le replay. */
   readonly rec = new Recorder();
+  /** Largeur de la zone de départ (m, de part et d'autre de l'axe). */
+  private spread = 320;
   private obstacles: Obstacle[];
 
   constructor(o: GameOpts) {
@@ -127,7 +133,11 @@ export class Game {
     this.rng = makeRng(this.seed * 1e6 + 1);
     const vc = activateVenue(o.venue ?? 'baie');
     this.venue = vc.venue;
-    this.course = vc.courses.find(c => c.id === o.course) ?? vc.courses[0];
+    {
+      const base = vc.courses.find(c => c.id === o.course) ?? vc.courses[0], nb = o.slot ? o.slot.n : Math.min(MAX_BOATS, (o.bots || 0) + 1), hw = lineHalf(nb);
+      this.course = { ...base, pin: { x: -hw, y: 0 }, cmte: { x: hw, y: 0 } };
+      this.spread = hw * 1.25;
+    }
     this.wind = new WindField(this.seed, this.met, this.venue.shifts, this.venue.gusts);
     this.sea = o.sea && SEAS[o.sea] ? o.sea : 'auto';
     this.collisions = o.collisions ?? true;
@@ -143,9 +153,9 @@ export class Game {
     this.wd = this.wind.dir(this.t);
     const rng = this.rng, c = this.course;
     this.obstacles = [...c.marks.filter(m => m.island == null).map(m => ({ x: m.x, y: m.y, r: m.r })), { ...c.pin, r: 3 }, { ...c.cmte, r: 12 }];
-    const n = o.bots || 0, L = LEVELS[o.lvl ?? 1], tot = n + 1;
+    const n = Math.min(MAX_BOATS - 1, o.bots || 0), L = LEVELS[o.lvl ?? 1], tot = n + 1, sp = this.spread;
     for (let i = 0; i < tot; i++) {
-      const x = -320 + (i + 0.5) * (640 / tot) + rrange(rng, -20, 20), dir = rng() < 0.5 ? 1 : -1;
+      const x = -sp + (i + 0.5) * (2 * sp / tot) + rrange(rng, -15, 15), dir = rng() < 0.5 ? 1 : -1;
       const y = rrange(rng, 280, 420);
       const b = mkBoat(this.cls, { id: i, x, y, h: this.wd + dir * 95 * D, v: 3 });
       b.tack = b.lastTack = dir;
@@ -165,7 +175,7 @@ export class Game {
     if (bj.ai) bj.ai.home = bj.x;
     if (o.slot) { // en ligne : chacun sa place sur la ligne
       const { i, n } = o.slot, dir = i % 2 ? 1 : -1;
-      b0.x = -320 + (i + 0.5) * (640 / Math.max(1, n)); b0.y = 300 + (i % 3) * 45; b0.h = this.wd + dir * 95 * D; b0.tack = b0.lastTack = dir;
+      b0.x = -sp + (i + 0.5) * (2 * sp / Math.max(1, n)); b0.y = 300 + (i % 3) * 45; b0.h = this.wd + dir * 95 * D; b0.tack = b0.lastTack = dir;
     }
     this.clock = o.clock; this.remoteClock = o.remoteClock;
     // configuration initiale raisonnable (puis l'assistance ou le joueur prend la main)

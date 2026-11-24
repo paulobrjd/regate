@@ -403,13 +403,13 @@ export class Canvas2D {
     // classement
     const st = g.standings();
     if (st.length > 1 && w > 420) {
-      const rows = st.slice(0, 8), bw = 170, bh = 14 + rows.length * 20, bx = w - bw - 12;
+      const top = st.slice(0, h < 600 ? 6 : 10), mine = st.find(e => e.me), rows = mine && !top.includes(mine) ? [...top, mine] : top, bw = 170, bh = 14 + rows.length * 20, bx = w - bw - 12;
       this.panel(bx, 12, bw, bh, 10, 0.55);
       ctx.font = '600 13px Barlow,sans-serif'; ctx.textBaseline = 'middle';
       const meD = st.find(e => e.me)!.d;
       rows.forEach((e, i) => {
         const y = 12 + 17 + i * 20;
-        ctx.textAlign = 'left'; ctx.fillStyle = e.me ? '#fff' : 'rgba(255,255,255,.8)'; ctx.fillText((i + 1) + '.', bx + 10, y);
+        ctx.textAlign = 'left'; ctx.fillStyle = e.me ? '#fff' : 'rgba(255,255,255,.8)'; ctx.fillText((st.indexOf(e) + 1) + '.', bx + 10, y);
         ctx.fillStyle = e.col; ctx.beginPath(); ctx.arc(bx + 34, y, 5, 0, TAU); ctx.fill();
         ctx.fillStyle = e.me ? '#fff' : 'rgba(255,255,255,.85)'; ctx.fillText((e.me ? 'Toi' : e.name).slice(0, 10) + (e.ocs ? ' ⚑' : ''), bx + 46, y);
         ctx.textAlign = 'right';
@@ -420,7 +420,7 @@ export class Canvas2D {
     const pts = [{ x: 0, y: 0 }, ...c.marks];
     let X0 = Math.min(...pts.map(p => p.x)), X1 = Math.max(...pts.map(p => p.x)), Y0 = Math.min(...pts.map(p => p.y)), Y1 = Math.max(...pts.map(p => p.y));
     const pad = Math.max(X1 - X0, Y1 - Y0) * 0.12 + 300; X0 -= pad; X1 += pad; Y0 -= pad; Y1 += pad;
-    const mh = 130, mw = clamp(mh * (X1 - X0) / (Y1 - Y0), 60, 130), mx = w - mw - 12, my = st.length > 1 && w > 420 ? 12 + 14 + Math.min(8, st.length) * 20 + 10 : 12;
+    const mh = 130, mw = clamp(mh * (X1 - X0) / (Y1 - Y0), 60, 130), mx = w - mw - 12, my = st.length > 1 && w > 420 ? 12 + 14 + Math.min(h < 600 ? 7 : 11, st.length) * 20 + 10 : 12;
     const sc = Math.min((mw - 12) / (X1 - X0), (mh - 12) / (Y1 - Y0)), ox = mx + mw / 2 - (X0 + X1) / 2 * sc, oy = my + mh / 2 - (Y0 + Y1) / 2 * sc;
     const tx = (x: number) => ox + x * sc, ty = (y: number) => oy + y * sc;
     this.panel(mx, my, mw, mh, 10, 0.55);

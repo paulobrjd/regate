@@ -7,8 +7,8 @@ import { extname, join, resolve, normalize } from 'node:path';
 import { WebSocketServer } from 'ws';
 
 const PRE = 60;                 // compte à rebours (secondes de jeu)
-const MAX_PLAYERS = 8;
-const COLS = ['#ffd23f', '#e8384f', '#3ddc97', '#b388ff', '#4cc9f0', '#ff8fab', '#f4a261', '#a3e635'];
+const MAX_PLAYERS = 15;
+const COLS = ['#ffd23f', '#e8384f', '#3ddc97', '#b388ff', '#4cc9f0', '#ff8fab', '#f4a261', '#a3e635', '#ffffff', '#1f6feb', '#ff6a1f', '#00b3a4', '#c2185b', '#8d6e63', '#2c3e50'];
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon' };
 
@@ -53,7 +53,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     broadcast(r, roomInfo(r));
   }
   function joinRoom(c, r) {
-    if (r.players.size >= MAX_PLAYERS) return send(c.ws, { type: 'error', msg: 'Ce salon est plein (8 joueurs maximum).' });
+    if (r.players.size >= MAX_PLAYERS) return send(c.ws, { type: 'error', msg: 'Ce salon est plein (15 joueurs maximum).' });
     if (r.phase === 'race') return send(c.ws, { type: 'error', msg: 'Une course est en cours dans ce salon : attends l\'arrivée et réessaie.' });
     leave(c);
     const used = new Set([...r.players.values()].map(p => p.col));

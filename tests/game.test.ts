@@ -70,3 +70,14 @@ describe('aides au pilotage', () => {
     expect(g.me.v / 0.514444).toBeGreaterThan(5);
   });
 });
+
+describe('grande flotte', () => {
+  it('15 bateaux : la ligne s\'allonge et toute la flotte boucle le parcours', () => {
+    const g = new Game({ mode: 'solo', demo: true, seed: 6.1, bots: 14, lvl: 1, course: 'banane', met: 1 });
+    expect(g.boats.length).toBe(15);
+    expect(g.course.cmte.x - g.course.pin.x).toBeGreaterThan(900);
+    expect(new Set(g.boats.map(b => b.col)).size).toBe(15);
+    run(g, 4000);
+    expect(g.boats.filter(b => b.fin != null).length).toBeGreaterThanOrEqual(14);
+  }, 120000);
+});
