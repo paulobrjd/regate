@@ -135,3 +135,26 @@ describe('dynamique du bateau', () => {
     expect(Math.abs(norm(b.h))).toBeGreaterThan(30 * D);
   });
 });
+
+import { WindField, METEO } from '../src/physics/wind';
+describe('événements météo', () => {
+  const plan = (seed: number) => { const w = new WindField(seed, METEO[1]); w.planEvents(1800, { x: 0, y: -1500 }, 3000, makeRng(seed * 7)); return w; };
+  it('même graine, mêmes événements (en ligne, tout le monde vit la même course)', () => {
+    expect(JSON.stringify(plan(4.4).events)).toBe(JSON.stringify(plan(4.4).events));
+    expect(plan(4.4).events.length).toBeGreaterThanOrEqual(3);
+  });
+  it('coup de vent : le vent forcit ; molle : il tombe ; bascule : il tourne ; grain : rafale sur place', () => {
+    const kinds = new Set<string>();
+    for (let s = 1; s < 30; s++) {
+      const w = plan(s); w.events.forEach(e => kinds.add(e.kind));
+      for (const e of w.events) {
+        const mid = e.t0 + e.dur / 2, before = e.t0 - 5;
+        if (e.kind === 'coup') expect(w.base(mid)).toBeGreaterThan(w.base(before) * 1.3);
+        if (e.kind === 'molle') expect(w.base(mid)).toBeLessThan(w.base(before) * 0.7);
+        if (e.kind === 'bascule') { const calm = new WindField(s, METEO[1]); expect(Math.abs(w.dir(mid) - calm.dir(mid))).toBeGreaterThan(0.25); }
+        if (e.kind === 'grain') { const c = w.grainCenter(e, mid); expect(w.speedAt(c.x, c.y, mid) - new WindField(s, METEO[1]).speedAt(c.x, c.y, mid)).toBeGreaterThan(9); }
+      }
+    }
+    expect(kinds.size).toBe(4);
+  });
+});

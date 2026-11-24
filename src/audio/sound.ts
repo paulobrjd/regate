@@ -102,6 +102,7 @@ export function sfx(s: Sfx): void {
     case 'mark': tone(2600, 0.25, 0.04, 'sine', 2300, 40); setTimeout(() => tone(2600, 0.3, 0.04, 'sine', 2300, 40), 300); break; // sifflet
     case 'winch': for (let i = 0; i < 10; i++) setTimeout(() => click(), i * 45 + Math.random() * 10); break;
     case 'ground': burst(90, 0.8, 1.2, 0.35, 'lowpass'); burst(400, 1, 0.6, 0.15); break;
+    case 'event': tone(880, 0.18, 0.05, 'triangle'); setTimeout(() => tone(660, 0.18, 0.05, 'triangle'), 200); setTimeout(() => tone(880, 0.3, 0.05, 'triangle'), 400); break;
   }
 }
 

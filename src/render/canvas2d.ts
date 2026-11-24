@@ -103,6 +103,14 @@ export class Canvas2D {
       ctx.strokeStyle = `rgba(220,240,255,${Math.sin(ph * Math.PI) * 0.38})`;
       ctx.save(); ctx.translate(qx, qy); ctx.rotate(g.wd); ctx.beginPath(); ctx.moveTo(-8 * px, 0); ctx.quadraticCurveTo(0, -4 * px, 8 * px, 0); ctx.stroke(); ctx.restore();
     }
+    // grains : nuage sombre qui avance sur le plan d'eau
+    for (const e of g.wind.events) {
+      if (e.kind !== 'grain' || g.t < e.t0 - 20 || g.t > e.t0 + e.dur) continue;
+      const c = g.wind.grainCenter(e, Math.max(g.t, e.t0)), rg = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, e.r);
+      rg.addColorStop(0, 'rgba(20,24,34,.55)'); rg.addColorStop(0.7, 'rgba(20,24,34,.3)'); rg.addColorStop(1, 'rgba(20,24,34,0)');
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(c.x, c.y, e.r, 0, TAU); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.font = `800 ${16 * px}px "Barlow Condensed",sans-serif`; ctx.textAlign = 'center'; ctx.fillText('GRAIN', c.x, c.y);
+    }
     // îles
     for (const isl of ISLANDS) {
       if (isl.x + isl.r * 1.3 < vx0 || isl.x - isl.r * 1.3 > vx1 || isl.y + isl.r * 1.3 < vy0 || isl.y - isl.r * 1.3 > vy1) continue;
@@ -399,6 +407,21 @@ export class Canvas2D {
     if (g.timeScale > 1) {
       ctx.font = '800 14px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center';
       ctx.fillStyle = '#ffd23f'; ctx.fillText('ACCÉLÉRÉ ×' + g.timeScale + ' (T)', 48, 136);
+    }
+    // événements météo en cours ou annoncés
+    {
+      const list = g.wind.upcoming(t, 25);
+      list.slice(0, 2).forEach(({ e, inS, left }, i) => {
+        const y = 196 + i * 46, now = inS <= 0;
+        const ico: Record<string, string> = { grain: '⛈', coup: '💨', molle: '〰', bascule: '↻' };
+        const name: Record<string, string> = { grain: 'Grain', coup: 'Coup de vent', molle: 'Molle', bascule: 'Bascule ' + Math.round(Math.abs(e.amp) * 57.3) + '° ' + (e.amp > 0 ? 'droite' : 'gauche') };
+        this.panel(12, y, 190, 40, 10, now ? 0.82 : 0.6);
+        if (now) { ctx.fillStyle = 'rgba(255,214,63,.9)'; ctx.fillRect(12, y + 36, 190 * Math.max(0, Math.min(1, left / e.dur)), 4); }
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '800 16px "Barlow Condensed",sans-serif'; ctx.fillStyle = now ? '#ffd23f' : '#fff';
+        ctx.fillText(ico[e.kind] + '  ' + name[e.kind], 22, y + 14);
+        ctx.font = '600 11px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.8)';
+        ctx.fillText(now ? 'encore ' + Math.ceil(left) + ' s' : 'dans ' + Math.ceil(inS) + ' s', 22, y + 29);
+      });
     }
     // classement
     const st = g.standings();

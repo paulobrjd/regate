@@ -61,13 +61,13 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     });
     const host = isHost();
     for (const id of ['nVenue', 'nCourse', 'nMet', 'nSky', 'nPace', 'nSea']) sel(id).disabled = !host;
-    $<HTMLInputElement>('nNoColl').disabled = !host;
+    $<HTMLInputElement>('nNoColl').disabled = !host; $<HTMLInputElement>('nEvents').disabled = !host;
     const st = r.settings;
-    sel('nVenue').value = st.venue; fillCourses(st.venue, st.course); sel('nMet').value = String(st.met); sel('nSky').value = st.sky; sel('nPace').value = String(st.pace); sel('nSea').value = st.sea ?? 'auto'; $<HTMLInputElement>('nNoColl').checked = st.collisions === false;
+    sel('nVenue').value = st.venue; fillCourses(st.venue, st.course); sel('nMet').value = String(st.met); sel('nSky').value = st.sky; sel('nPace').value = String(st.pace); sel('nSea').value = st.sea ?? 'auto'; $<HTMLInputElement>('nNoColl').checked = st.collisions === false; $<HTMLInputElement>('nEvents').checked = st.events !== false;
     $('netStart').hidden = !(host || r.permanent) || r.phase === 'race';
     $('netStart').textContent = r.permanent ? 'Partir maintenant' : 'Lancer la course';
     $('netAbort').hidden = !host || r.phase !== 'race' || !!r.permanent;
-    for (const id of ['nVenue', 'nCourse', 'nMet', 'nSky', 'nPace', 'nSea', 'nNoColl']) (sel(id).closest('label') as HTMLElement).style.display = r.permanent ? 'none' : '';
+    for (const id of ['nVenue', 'nCourse', 'nMet', 'nSky', 'nPace', 'nSea', 'nNoColl', 'nEvents']) (sel(id).closest('label') as HTMLElement).style.display = r.permanent ? 'none' : '';
     $('netCodeLbl').textContent = r.permanent ? 'Partie ouverte : ' : 'Code du salon : ';
     hint(r);
     if (r.permanent) { msg(r.players.length + ' marin' + (r.players.length > 1 ? 's' : '') + ' au ponton du Grand Large · ping ' + net.ping_ms + ' ms'); return; }
@@ -137,10 +137,10 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     try { await navigator.clipboard.writeText(url); $('netCopy').textContent = 'Lien copié !'; } catch { $('netCopy').textContent = url; }
     setTimeout(() => { $('netCopy').textContent = 'Copier le lien'; }, 2500);
   };
-  const pushSettings = () => { if (isHost()) net.send({ type: 'settings', settings: { venue: sel('nVenue').value, course: sel('nCourse').value, met: +sel('nMet').value, sky: sel('nSky').value, pace: +sel('nPace').value, sea: sel('nSea').value, collisions: !$<HTMLInputElement>('nNoColl').checked } }); };
+  const pushSettings = () => { if (isHost()) net.send({ type: 'settings', settings: { venue: sel('nVenue').value, course: sel('nCourse').value, met: +sel('nMet').value, sky: sel('nSky').value, pace: +sel('nPace').value, sea: sel('nSea').value, collisions: !$<HTMLInputElement>('nNoColl').checked, events: $<HTMLInputElement>('nEvents').checked } }); };
   sel('nVenue').onchange = () => { fillCourses(sel('nVenue').value); pushSettings(); };
   for (const id of ['nCourse', 'nMet', 'nSky', 'nPace', 'nSea']) sel(id).onchange = pushSettings;
-  $('nNoColl').onchange = pushSettings;
+  $('nNoColl').onchange = pushSettings; $('nEvents').onchange = pushSettings;
 
   // lien d'invitation : ?salon=ABCD
   const invite = new URLSearchParams(location.search).get('salon');

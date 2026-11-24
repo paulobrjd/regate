@@ -88,6 +88,9 @@ export class Scene3D {
   private arcKey = '';
   private arcPts: { x: number; z: number; h: number }[] = [];
   private projV = new T.Vector3();
+  /** Grains en 3D : nuage noir et rideau de pluie qui traversent le plan d'eau. */
+  private grains = new Map<number, { g: T.Group; shaft: T.Mesh<T.CylinderGeometry, T.MeshBasicMaterial>; clouds: T.Sprite[] }>();
+  private grainTex: T.CanvasTexture | null = null;
   // ciel, météo, plan d'eau
   private FOG!: T.Color; private skyTop = new T.Color('#2569ad'); private glow = new T.Color(1, 0.88, 0.65);
   // nuit : étoiles, feux de navigation, phares, bouées à éclats
@@ -805,6 +808,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     });
     for (const r of this.boats3.values()) r.yaw.visible = r.used;
     this.decor.update(g, boats, me, dt, rt, this.amp);
+    this.updateGrains(g);
     this.updateWeather(g, dt);
     for (const r of this.boats3.values()) r.navG.visible = this.night;
     if (this.night) {
@@ -968,6 +972,36 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       this.rain.geometry.attributes.position.needsUpdate = true;
       (this.rain.material as T.LineBasicMaterial).opacity = 0.2 + 0.4 * r;
     }
+  }
+
+  private updateGrains(g: Game): void {
+    const t = g.t, seen = new Set<number>();
+    for (const e of g.wind.events) {
+      if (e.kind !== 'grain' || t < e.t0 - 30 || t > e.t0 + e.dur + 10) continue;
+      seen.add(e.t0);
+      let G = this.grains.get(e.t0);
+      if (!G) {
+        if (!this.grainTex) {
+          const c = document.createElement('canvas'); c.width = 256; c.height = 128; const x = c.getContext('2d')!;
+          for (let i = 0; i < 26; i++) { const px = 30 + Math.random() * 196, py = 40 + Math.random() * 50, r = 20 + Math.random() * 40, gr = x.createRadialGradient(px, py, 0, px, py, r); gr.addColorStop(0, 'rgba(255,255,255,.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = gr; x.fillRect(0, 0, 256, 128); }
+          this.grainTex = new T.CanvasTexture(c);
+        }
+        const grp = new T.Group(), clouds: T.Sprite[] = [];
+        for (let i = 0; i < 9; i++) {
+          const sp = new T.Sprite(new T.SpriteMaterial({ map: this.grainTex, color: '#2e333d', transparent: true, depthWrite: false, fog: false }));
+          const a = i / 9 * Math.PI * 2, d = e.r * (0.2 + 0.5 * Math.random()); sp.position.set(Math.cos(a) * d, 420 + Math.random() * 180, Math.sin(a) * d);
+          const w = e.r * (1 + Math.random() * 0.8); sp.scale.set(w, w * 0.45, 1); grp.add(sp); clouds.push(sp);
+        }
+        const shaft = new T.Mesh(new T.CylinderGeometry(e.r * 0.55, e.r * 0.7, 480, 32, 1, true), new T.MeshBasicMaterial({ color: '#5d6670', transparent: true, opacity: 0.2, depthWrite: false, side: T.DoubleSide }));
+        shaft.position.y = 240; grp.add(shaft);
+        this.scene.add(grp); G = { g: grp, shaft, clouds }; this.grains.set(e.t0, G);
+      }
+      const c = g.wind.grainCenter(e, Math.max(t, e.t0 - 30));
+      const f = Math.max(0, Math.min(1, (t - (e.t0 - 30)) / 40, (e.t0 + e.dur + 10 - t) / 40));
+      G.g.position.set(c.x, 0, c.y);
+      G.shaft.material.opacity = 0.22 * f; for (const cl of G.clouds) cl.material.opacity = 0.9 * f;
+    }
+    for (const [k, G] of this.grains) if (!seen.has(k)) { this.scene.remove(G.g); this.grains.delete(k); }
   }
 
   /** Repères visuels de la prochaine marque (et drapeaux qui flottent). */

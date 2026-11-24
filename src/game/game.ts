@@ -31,7 +31,7 @@ export const MAX_BOATS = 15;
 /** Demi-longueur de la ligne de départ (m) : elle s'allonge avec le nombre de bateaux. */
 export const lineHalf = (n: number) => Math.max(260, Math.min(620, 110 + 34 * n));
 
-export type Sfx = 'tick' | 'gun' | 'finish' | 'capsize' | 'gybeWild' | 'mark' | 'winch' | 'ground';
+export type Sfx = 'tick' | 'gun' | 'finish' | 'capsize' | 'gybeWild' | 'mark' | 'winch' | 'ground' | 'event';
 
 export type Command = 'head1' | 'head2' | 'head3' | 'head4' | 'head5' | 'reefIn' | 'reefOut' | 'keel' | 'foils' | 'ballast'
   | 'pilot' | 'pilotMode' | 'pilotTack' | 'pilotLeft' | 'pilotRight' | 'pilotLeft10' | 'pilotRight10' | 'route';
@@ -51,6 +51,8 @@ export interface GameOpts {
   sea?: string;
   /** Collisions entre bateaux (par défaut oui). */
   collisions?: boolean;
+  /** Événements météo pendant la course (par défaut oui). */
+  events?: boolean;
   assist?: Assist;
   name?: string;
   col?: string;
@@ -139,6 +141,12 @@ export class Game {
       this.spread = hw * 1.25;
     }
     this.wind = new WindField(this.seed, this.met, this.venue.shifts, this.venue.gusts);
+    if (o.events !== false) {
+      // durée de course estimée (≈ 11 nds de moyenne), centre et étendue du parcours
+      const pts = [{ x: 0, y: 0 }, ...this.course.marks], cx = pts.reduce((a, p) => a + p.x, 0) / pts.length, cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+      const span = Math.max(1500, ...pts.map(p => Math.hypot(p.x - cx, p.y - cy) * 2));
+      this.wind.planEvents(this.course.nm * 1852 / 5.6, { x: cx, y: cy }, span, makeRng(this.seed * 1e6 + 77));
+    }
     this.sea = o.sea && SEAS[o.sea] ? o.sea : 'auto';
     this.collisions = o.collisions ?? true;
     setSwell(this.venue.swell ?? 0);
@@ -294,6 +302,7 @@ export class Game {
     if (this.isMe(this.me)) this.coach(this.me, dt);
     this.autoSlow();
     if (this.demo && (this.boats.every(b => b.fin != null) || t > 1500)) this.over = true;
+    if (!this.demo) this.announceEvents();
     if (this.msgT > 0) this.msgT -= dt;
   }
 
@@ -354,6 +363,36 @@ export class Game {
     const k = SEAS[this.sea]?.k, v = this.venue.waves;
     if (k != null) return k * (this.venue.id === 'lac' ? Math.min(1, k) : 1);
     return this.met.amp * v * Math.pow(Math.max(0.3, this.wind.base(t) / this.met.base), 1.6);
+  }
+
+  private announced = new Set<string>();
+  /** Annonce les événements météo : 25 s avant, puis à leur arrivée. */
+  private announceEvents(): void {
+    const t = this.t, b = this.me, D2 = 180 / Math.PI;
+    for (const e of this.wind.events) {
+      const id = e.kind + e.t0;
+      if (t > e.t0 - 25 && t < e.t0 && !this.announced.has(id + 'a')) {
+        this.announced.add(id + 'a');
+        const pre: Record<string, string> = {
+          grain: 'Un grain noir approche par le nord : rafales et pluie dans 25 s',
+          coup: 'Le ciel se charge : un coup de vent arrive',
+          molle: 'Ça mollit au loin : la brise va tomber',
+          bascule: 'Le vent s\'apprête à tourner ' + (e.amp > 0 ? 'vers la droite' : 'vers la gauche'),
+        };
+        this.say('⚠ ' + pre[e.kind]); this.onSfx('event'); this.timeScale = 1;
+      }
+      if (t >= e.t0 && t < e.t0 + 5 && !this.announced.has(id + 'b')) {
+        this.announced.add(id + 'b');
+        const deg = Math.round(Math.abs(e.amp) * D2), base = Math.round(this.wind.met.base);
+        const now: Record<string, string> = {
+          grain: 'GRAIN ! Rafales à plus de ' + (Math.round(b.tws) + 10) + ' nœuds : choque dans les rafales',
+          coup: 'COUP DE VENT : ça monte à ' + Math.round(base * (1 + e.amp)) + ' nœuds, réduis la toile',
+          molle: 'MOLLE : le vent tombe vers ' + Math.round(base * (1 - e.amp)) + ' nœuds, cherche les risées',
+          bascule: 'BASCULE de ' + deg + '° ' + (e.amp > 0 ? 'à droite' : 'à gauche') + ' : regarde la flèche verte, il faut peut-être virer',
+        };
+        this.say(now[e.kind]); this.onSfx('event');
+      }
+    }
   }
 
   /** Repasse en temps réel près des moments importants. */

@@ -81,6 +81,7 @@
         </div>
         <p class="note">Envie de naviguer avec du monde ? <a href="#" id="toOpen">Rejoins Le Grand Large</a>, la partie ouverte à tous.</p>
         <label class="chk"><input type="checkbox" id="noColl"> Sans collision (les bateaux se traversent)</label>
+        <label class="chk"><input type="checkbox" id="events" checked> Événements météo (grains, bascules, coups de vent, molles)</label>
         <div class="row">
           <button class="go" id="goBtn">Larguer les amarres</button>
           <button class="opt" id="resumeBtn" hidden>Reprendre la course</button>
@@ -113,6 +114,7 @@
             <label class="field">Rythme<select id="nPace"><option value="3">Arcade</option><option value="2">Dynamique</option><option value="1">Réaliste</option></select></label>
           </div>
           <label class="chk"><input type="checkbox" id="nNoColl"> Sans collision</label>
+          <label class="chk"><input type="checkbox" id="nEvents" checked> Événements météo</label>
           <div class="row"><label class="field">Ton assistance<select id="nAssist"></select></label></div>
           <div class="row"><button class="go" id="netStart">Lancer la course</button><button class="opt" id="netAbort" hidden>Arrêter la course pour tout le monde</button><button class="opt" id="netLeave">Quitter le salon</button></div>
           <p class="note" id="netHint"></p>

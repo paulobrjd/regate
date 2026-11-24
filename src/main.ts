@@ -42,6 +42,7 @@ if (prefs.venue) sel('venue').value = prefs.venue;
 fillCourses();
 for (const k of ['course', 'met', 'nBots', 'lvl', 'assist', 'pace', 'sky', 'sea']) if (prefs[k] != null) sel(k).value = prefs[k];
 $<HTMLInputElement>('noColl').checked = !!prefs.noColl;
+$<HTMLInputElement>('events').checked = prefs.events !== false;
 if (!prefs.assist) sel('assist').value = 'debutant';
 if (!prefs.course) sel('course').value = 'sprint';
 const descCourse = () => {
@@ -67,9 +68,9 @@ function demo(): void {
 }
 function startSolo(): void {
   unlockAudio();
-  const p = { noColl: $<HTMLInputElement>('noColl').checked, sea: sel('sea').value, venue: sel('venue').value, sky: sel('sky').value, course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value, pace: sel('pace').value };
+  const p = { events: $<HTMLInputElement>('events').checked, noColl: $<HTMLInputElement>('noColl').checked, sea: sel('sea').value, venue: sel('venue').value, sky: sel('sky').value, course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value, pace: sel('pace').value };
   try { localStorage.setItem('regate-prefs', JSON.stringify(p)); } catch { /* */ }
-  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, venue: p.venue, sky: p.sky, sea: p.sea, collisions: !p.noColl, course: p.course, assist: ASSISTS[p.assist].a, pace: +p.pace }));
+  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, venue: p.venue, sky: p.sky, sea: p.sea, collisions: !p.noColl, events: p.events, course: p.course, assist: ASSISTS[p.assist].a, pace: +p.pace }));
   $('ovStart').hidden = true; $('ovEnd').hidden = true; $('resumeBtn').hidden = true;
 }
 function menu(): void {
@@ -104,7 +105,7 @@ function startNet(m: StartMsg): void {
   unlockAudio();
   const players = m.players, i = Math.max(0, players.findIndex(p => p.id === net.id)), meP = players[i], st = m.settings;
   const clock = () => (net.serverNow() - m.gunAt) * st.pace / 1000;
-  const g = new Game({ mode: 'net', seed: m.seed, venue: st.venue, course: st.course, met: st.met, sky: st.sky, sea: st.sea, collisions: st.collisions !== false, pace: st.pace, bots: 0,
+  const g = new Game({ mode: 'net', seed: m.seed, venue: st.venue, course: st.course, met: st.met, sky: st.sky, sea: st.sea, collisions: st.collisions !== false, events: st.events !== false, pace: st.pace, bots: 0,
     name: meP?.name, col: meP?.col, assist: assistChoice(), slot: { i, n: players.length }, clock, remoteClock: () => net.serverNow(), startT: clock() });
   for (const p of players) if (p.id !== net.id) g.addRemote(p.id, p.name, p.col);
   lastResults = [];

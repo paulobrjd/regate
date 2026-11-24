@@ -25,7 +25,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     const [venue, course] = OPEN_COURSES[openTurn++ % OPEN_COURSES.length], rnd = Math.random();
     const met = rnd < 0.2 ? 0 : rnd < 0.65 ? 1 : rnd < 0.85 ? 2 : 4;
     const sky = ['auto', 'auto', 'soleil', 'couchant', 'nuageux', 'nuit'][Math.floor(Math.random() * 6)];
-    return { venue, course, met, sky, pace: 3, sea: 'auto', collisions: true };
+    return { venue, course, met, sky, pace: 3, sea: 'auto', collisions: true, events: true };
   };
   rooms.set(OPEN_CODE, { code: OPEN_CODE, public: true, permanent: true, name: 'Le Grand Large', host: null, phase: 'lobby', players: new Map(),
     settings: openSettings(), seed: 0, gunAt: 0, firstFin: 0, autoAt: 0 });
@@ -130,7 +130,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
             const s = m.settings, o = r.settings;
             r.settings = { venue: String(s.venue ?? o.venue).slice(0, 20), course: String(s.course ?? o.course).slice(0, 20), met: Math.max(0, Math.min(4, Number(s.met ?? o.met) | 0)),
               sky: String(s.sky ?? o.sky).slice(0, 12), pace: [1, 2, 3].includes(Number(s.pace)) ? Number(s.pace) : o.pace,
-              sea: ['auto', 'plate', 'belle', 'formee', 'grosse'].includes(s.sea) ? s.sea : o.sea, collisions: typeof s.collisions === 'boolean' ? s.collisions : o.collisions };
+              sea: ['auto', 'plate', 'belle', 'formee', 'grosse'].includes(s.sea) ? s.sea : o.sea, collisions: typeof s.collisions === 'boolean' ? s.collisions : o.collisions, events: typeof s.events === 'boolean' ? s.events : o.events !== false };
             broadcast(r, roomInfo(r));
           }
           break;
