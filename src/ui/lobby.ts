@@ -32,7 +32,8 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     msg('Connexion au serveur…');
     try { await net.connect(name()); msg('Connecté. Crée un salon, ou rejoins celui d\'un pote avec son code.'); net.send({ type: 'list' }); return true; }
     catch {
-      msg('Impossible de joindre le serveur. Le jeu en ligne marche quand le jeu est ouvert depuis ton serveur (voir DEPLOIEMENT.md), pas depuis la page claude.ai.');
+      msg('Impossible de joindre le serveur. Le jeu en ligne ne marche pas depuis la page claude.ai : ouvre le jeu sur ton site (bouton ci-dessous). Si tu y es déjà, le serveur se réveille : attends une minute et réessaie.');
+      $('netSite').hidden = location.hostname === 'regate-au-large.onrender.com';
       return false;
     }
   };
@@ -54,8 +55,9 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     $<HTMLInputElement>('nNoColl').disabled = !host;
     const st = r.settings;
     sel('nVenue').value = st.venue; fillCourses(st.venue, st.course); sel('nMet').value = String(st.met); sel('nSky').value = st.sky; sel('nPace').value = String(st.pace); sel('nSea').value = st.sea ?? 'auto'; $<HTMLInputElement>('nNoColl').checked = st.collisions === false;
-    $('netStart').hidden = !host;
-    $('netHint').textContent = r.phase === 'race' ? 'Course en cours…' : host
+    $('netStart').hidden = !host || r.phase === 'race';
+    $('netAbort').hidden = !host || r.phase !== 'race';
+    $('netHint').textContent = r.phase === 'race' ? (host ? 'Course en cours. Tes potes peuvent encore la rejoindre avec le code.' : 'Course en cours…') : host
       ? (r.players.length < 2 ? 'Envoie le code (ou le lien) à tes potes. Tu peux aussi lancer seul pour essayer.' : 'Tout le monde est là ? Lance la course : le départ est donné 1 minute de jeu plus tard.')
       : 'L\'hôte règle la course et la lance.';
     msg(r.players.length + ' marin' + (r.players.length > 1 ? 's' : '') + ' dans le salon · ping ' + net.ping_ms + ' ms');
@@ -76,6 +78,7 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
   $('netJoin').onclick = async () => { const c = $<HTMLInputElement>('netCode').value.trim().toUpperCase(); if (c.length === 4 && await ensure()) net.send({ type: 'join', code: c }); else if (c.length !== 4) msg('Le code fait 4 lettres.'); };
   $('netLeave').onclick = () => { net.send({ type: 'leave' }); net.room = null; render(null); net.send({ type: 'list' }); };
   $('netStart').onclick = () => net.send({ type: 'start' });
+  $('netAbort').onclick = () => net.send({ type: 'abort' });
   $('netCopy').onclick = async () => {
     const url = location.origin + location.pathname + '?salon=' + (net.room?.code ?? '');
     try { await navigator.clipboard.writeText(url); $('netCopy').textContent = 'Lien copié !'; } catch { $('netCopy').textContent = url; }

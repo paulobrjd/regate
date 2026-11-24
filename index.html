@@ -87,6 +87,7 @@
       </div>
       <div id="pNet" hidden>
         <p class="note" id="netMsg">Joue en ligne avec tes potes : crée un salon et envoie-leur le code.</p>
+        <p id="netSite" hidden><a class="go" style="display:inline-flex;align-items:center;text-decoration:none;padding:10px 18px" href="https://regate-au-large.onrender.com/" target="_blank" rel="noopener">Ouvrir le jeu en ligne ↗</a></p>
         <div id="netHome">
           <div class="row"><label class="field">Ton pseudo<input id="pseudo" maxlength="14" autocomplete="off" placeholder="Marin"></label></div>
           <div class="row"><button class="go" id="netCreate">Créer un salon privé</button><button class="opt" id="netQuick">Partie rapide</button></div>
@@ -108,7 +109,7 @@
           </div>
           <label class="chk"><input type="checkbox" id="nNoColl"> Sans collision</label>
           <div class="row"><label class="field">Ton assistance<select id="nAssist"></select></label></div>
-          <div class="row"><button class="go" id="netStart">Lancer la course</button><button class="opt" id="netLeave">Quitter le salon</button></div>
+          <div class="row"><button class="go" id="netStart">Lancer la course</button><button class="opt" id="netAbort" hidden>Arrêter la course pour tout le monde</button><button class="opt" id="netLeave">Quitter le salon</button></div>
           <p class="note" id="netHint"></p>
         </div>
       </div>

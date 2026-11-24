@@ -110,7 +110,7 @@ function startNet(m: StartMsg): void {
   lastResults = [];
   start(g);
   $('ovStart').hidden = true; $('ovEnd').hidden = true; $('resumeBtn').hidden = true;
-  g.say('Course en ligne : ' + players.length + ' bateau' + (players.length > 1 ? 'x' : '') + ' · départ dans ' + Math.round(-g.t) + ' s');
+  g.say(g.t < 0 ? 'Course en ligne : ' + players.length + ' bateau' + (players.length > 1 ? 'x' : '') + ' · départ dans ' + Math.round(-g.t) + ' s' : 'Tu rejoins la course en route : coupe la ligne et fonce !');
 }
 function showNetEnd(g: Game): void {
   const mine = lastResults.find(r => r.id === net.id), t = mine?.fin ?? g.me.fin;
@@ -140,7 +140,16 @@ net.onResults = (list, final) => {
   else if (g.endShown) renderNetRank();
 };
 const lobby = initLobby({ onStart: startNet, isRacing: () => !!app.g && app.g.mode === 'net' && app.g.me.fin == null });
-{ const prev = net.onRoom; net.onRoom = r => { prev(r); const g = app.g; if (g && g.mode === 'net' && r) for (const id of [...g.remotes.keys()]) if (!r.players.some(p => p.id === id)) g.removeRemote(id); }; }
+{
+  const prev = net.onRoom;
+  net.onRoom = r => {
+    prev(r);
+    const g = app.g; if (!g || g.mode !== 'net' || !r) return;
+    for (const id of [...g.remotes.keys()]) if (!r.players.some(p => p.id === id)) g.removeRemote(id);
+    // un pote qui rejoint la course en route apparaît sur l'eau
+    if (r.phase === 'race') for (const p of r.players) if (p.id !== net.id && !g.remotes.has(p.id)) { g.addRemote(p.id, p.name, p.col); g.say(p.name + ' rejoint la course'); }
+  };
+}
 let netSendT = 0;
 
 function renderRank(): void {

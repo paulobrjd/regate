@@ -51,16 +51,18 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     if (r.players.size === 0) { rooms.delete(r.code); log(`salon ${r.code} fermé`); return; }
     if (r.host === c.id) r.host = r.players.keys().next().value;
     broadcast(r, roomInfo(r));
+    if (r.phase === 'race' && [...r.players.values()].every(q => q.fin != null)) endRace(r);
   }
   function joinRoom(c, r) {
     if (r.players.size >= MAX_PLAYERS) return send(c.ws, { type: 'error', msg: 'Ce salon est plein (15 joueurs maximum).' });
-    if (r.phase === 'race') return send(c.ws, { type: 'error', msg: 'Une course est en cours dans ce salon : attends l\'arrivée et réessaie.' });
     leave(c);
     const used = new Set([...r.players.values()].map(p => p.col));
     const col = COLS.find(x => !used.has(x)) || COLS[0];
-    r.players.set(c.id, { id: c.id, name: c.name, col, ws: c.ws, s: null, leg: 0, d: 1e9, fin: null, ocs: false });
+    r.players.set(c.id, { id: c.id, name: c.name, col, ws: c.ws, s: null, leg: 0, d: 1e9, fin: null, ocs: false, seen: Date.now() });
     c.room = r;
     broadcast(r, roomInfo(r));
+    // course déjà lancée : le nouveau venu la rejoint en route (il part de la ligne)
+    if (r.phase === 'race') send(c.ws, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players, late: true });
   }
   function create(c, isPublic) {
     const r = { code: code(), public: !!isPublic, name: 'Salon de ' + c.name, host: c.id, phase: 'lobby', players: new Map(),
@@ -103,7 +105,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
           if (r && r.host === c.id && r.phase === 'lobby') {
             r.phase = 'race'; r.seed = Math.random() * 10; r.firstFin = 0;
             r.gunAt = Date.now() + 4000 + PRE * 1000 / r.settings.pace;
-            for (const p of r.players.values()) { p.s = null; p.leg = 0; p.d = 1e9; p.fin = null; p.ocs = false; }
+            for (const p of r.players.values()) { p.s = null; p.leg = 0; p.d = 1e9; p.fin = null; p.ocs = false; p.seen = Date.now(); }
             broadcast(r, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players });
             broadcast(r, roomInfo(r));
             log(`salon ${r.code} : départ (${r.players.size} joueurs)`);
@@ -112,8 +114,11 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
         case 'state':
           if (r && r.phase === 'race') {
             const p = r.players.get(c.id); if (!p || !Array.isArray(m.s) || m.s.length > 40) break;
-            p.s = m.s.map(Number); p.leg = Number(m.leg) | 0; p.d = Number(m.d) || 0; p.ocs = !!m.ocs;
+            p.s = m.s.map(Number); p.leg = Number(m.leg) | 0; p.d = Number(m.d) || 0; p.ocs = !!m.ocs; p.seen = Date.now();
           }
+          break;
+        case 'abort':
+          if (r && r.host === c.id && r.phase === 'race') { log(`salon ${r.code} : course arrêtée par l'hôte`); endRace(r); }
           break;
         case 'finish':
           if (r && r.phase === 'race') {
@@ -138,7 +143,9 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
       const boats = [...r.players.values()].filter(p => p.s).map(p => ({ id: p.id, s: p.s, fin: p.fin }));
       broadcast(r, { type: 'states', t: Date.now(), boats });
       // 10 minutes réelles après le premier arrivé, ou 3 heures de course : on clôt
-      if ((r.firstFin && Date.now() - r.firstFin > 10 * 60 * 1000) || raceTime(r) > 3 * 3600) endRace(r);
+      // fin : 10 min après le premier arrivé, 3 h de course, ou plus personne ne navigue depuis 2 min
+      const idle = [...r.players.values()].every(p => p.fin != null || Date.now() - (p.seen || 0) > 120000);
+      if ((r.firstFin && Date.now() - r.firstFin > 10 * 60 * 1000) || raceTime(r) > 3 * 3600 || idle) endRace(r);
     }
   }, 100);
   // connexions mortes

@@ -47,9 +47,10 @@ describe('serveur multijoueur', () => {
     a.send({ type: 'start' });
     const [sa, sb, sc] = await Promise.all([a.wait('start'), b.wait('start'), c.wait('start')]);
     expect(sa.seed).toBe(sb.seed); expect(sa.gunAt).toBe(sc.gunAt); expect(sb.settings.course).toBe('sprint-lac');
-    // pendant la course, on ne peut pas rejoindre
+    // pendant la course, un nouveau venu la rejoint en route
     const d = await client('Dan'); d.send({ type: 'join', code: room.code });
-    expect((await d.wait('error')).msg).toMatch(/course est en cours/);
+    const late = await d.wait('start'); expect(late.late).toBe(true); expect(late.seed).toBe(sa.seed);
+    d.close(); await a.wait('room', m => m.players.length === 3);
     // positions rediffusées
     a.send({ type: 'state', s: [10, 20, 0.5, 7], leg: 1, d: 900 }); b.send({ type: 'state', s: [30, 40, 0.1, 6], leg: 1, d: 950 });
     const st = await c.wait('states', m => m.boats.length === 2);
