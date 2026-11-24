@@ -12,9 +12,23 @@ const COLS = ['#ffd23f', '#e8384f', '#3ddc97', '#b388ff', '#4cc9f0', '#ff8fab', 
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon' };
 
-export function startServer({ port = Number(process.env.PORT) || 8080, dist = resolve('dist'), log = console.log } = {}) {
+/** Courses de la partie ouverte « Le Grand Large » : courtes et variées, tirées à tour de rôle. */
+const OPEN_COURSES = [['baie', 'sprint'], ['lac', 'sprint-lac'], ['baie', 'huit'], ['corsaires', 'crique'], ['baie', 'banane'], ['archipel', 'chenal'], ['baie', 'zigzag'], ['lac', 'triangle-lac'], ['corsaires', 'chiens'], ['baie', 'triangle']];
+export const OPEN_CODE = 'QUAI';
+
+export function startServer({ port = Number(process.env.PORT) || 8080, dist = resolve('dist'), log = console.log, autoDelay = 45000 } = {}) {
   const rooms = new Map();
   let nextId = 1;
+  // ---------- la partie toujours ouverte ----------
+  let openTurn = Math.floor(Math.random() * OPEN_COURSES.length);
+  const openSettings = () => {
+    const [venue, course] = OPEN_COURSES[openTurn++ % OPEN_COURSES.length], rnd = Math.random();
+    const met = rnd < 0.2 ? 0 : rnd < 0.65 ? 1 : rnd < 0.85 ? 2 : 4;
+    const sky = ['auto', 'auto', 'soleil', 'couchant', 'nuageux', 'nuit'][Math.floor(Math.random() * 6)];
+    return { venue, course, met, sky, pace: 3, sea: 'auto', collisions: true };
+  };
+  rooms.set(OPEN_CODE, { code: OPEN_CODE, public: true, permanent: true, name: 'Le Grand Large', host: null, phase: 'lobby', players: new Map(),
+    settings: openSettings(), seed: 0, gunAt: 0, firstFin: 0, autoAt: 0 });
 
   // ---------- fichiers du jeu ----------
   const http = createServer(async (req, res) => {
@@ -34,10 +48,10 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
   const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 16 * 1024 });
   const send = (ws, o) => { if (ws.readyState === 1) ws.send(JSON.stringify(o)); };
   const code = () => { let c; do { c = Array.from({ length: 4 }, () => LETTERS[Math.floor(Math.random() * LETTERS.length)]).join(''); } while (rooms.has(c)); return c; };
-  const roomInfo = r => ({ type: 'room', code: r.code, public: r.public, host: r.host, phase: r.phase, settings: r.settings,
+  const roomInfo = r => ({ type: 'room', code: r.code, public: r.public, permanent: !!r.permanent, name: r.name, autoAt: r.autoAt || 0, gunAt: r.gunAt, host: r.host, phase: r.phase, settings: r.settings,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, col: p.col })) });
   const broadcast = (r, o) => { const s = JSON.stringify(o); for (const p of r.players.values()) if (p.ws.readyState === 1) p.ws.send(s); };
-  const publicList = () => [...rooms.values()].filter(r => r.public).map(r => ({ code: r.code, name: r.name, players: r.players.size, phase: r.phase }));
+  const publicList = () => [...rooms.values()].filter(r => r.public).sort((a, b) => (b.permanent ? 1 : 0) - (a.permanent ? 1 : 0)).map(r => ({ code: r.code, name: r.name, players: r.players.size, phase: r.phase, permanent: !!r.permanent, autoAt: r.autoAt || 0 }));
   const raceTime = r => (Date.now() - r.gunAt) * r.settings.pace / 1000;
   const results = r => {
     const L = [...r.players.values()].map(p => ({ id: p.id, name: p.name, col: p.col, fin: p.fin, leg: p.leg, d: p.d, ocs: p.ocs }));
@@ -48,6 +62,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
   function leave(c) {
     const r = c.room; if (!r) return;
     r.players.delete(c.id); c.room = null;
+    if (r.players.size === 0 && r.permanent) { if (r.phase === 'race') endRace(r); r.autoAt = 0; return; }
     if (r.players.size === 0) {
       // salon vide : on le garde 3 minutes (téléphone en veille, page rechargée…)
       if (r.phase === 'race') endRace(r);
@@ -55,7 +70,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
       r.closeT = setTimeout(() => { if (r.players.size === 0) { rooms.delete(r.code); log(`salon ${r.code} fermé`); } }, 3 * 60 * 1000);
       return;
     }
-    if (r.host === c.id) r.host = r.players.keys().next().value;
+    if (r.host === c.id && !r.permanent) r.host = r.players.keys().next().value;
     broadcast(r, roomInfo(r));
     if (r.phase === 'race' && [...r.players.values()].every(q => q.fin != null)) endRace(r);
   }
@@ -65,7 +80,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     const used = new Set([...r.players.values()].map(p => p.col));
     const col = COLS.find(x => !used.has(x)) || COLS[0];
     clearTimeout(r.closeT);
-    if (!r.players.size) r.host = c.id; // le salon vide revient au premier qui revient
+    if (!r.players.size && !r.permanent) r.host = c.id; // le salon vide revient au premier qui revient
     r.players.set(c.id, { id: c.id, name: c.name, col, ws: c.ws, s: null, leg: 0, d: 1e9, fin: null, ocs: false, seen: Date.now() });
     c.room = r;
     broadcast(r, roomInfo(r));
@@ -82,7 +97,16 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     r.phase = 'lobby';
     for (const p of r.players.values()) { p.s = null; }
     broadcast(r, { type: 'results', final: true, list: results(r) });
+    if (r.permanent) { r.settings = openSettings(); r.autoAt = r.players.size ? Date.now() + autoDelay : 0; }
     broadcast(r, roomInfo(r));
+  }
+  function startRace(r) {
+    r.phase = 'race'; r.seed = Math.random() * 10; r.firstFin = 0; r.autoAt = 0;
+    r.gunAt = Date.now() + 4000 + PRE * 1000 / r.settings.pace;
+    for (const p of r.players.values()) { p.s = null; p.leg = 0; p.d = 1e9; p.fin = null; p.ocs = false; p.seen = Date.now(); }
+    broadcast(r, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players });
+    broadcast(r, roomInfo(r));
+    log(`salon ${r.code} : départ (${r.players.size} joueurs)`);
   }
 
   wss.on('connection', ws => {
@@ -98,7 +122,8 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
         case 'list': send(ws, { type: 'rooms', rooms: publicList() }); break;
         case 'create': create(c, m.public); break;
         case 'join': { const t = rooms.get(String(m.code || '').toUpperCase().trim()); if (!t) send(ws, { type: 'error', msg: 'Aucun salon avec le code ' + String(m.code || '').toUpperCase().trim() + '. Vérifie les 4 lettres, ou demande à ton pote de créer un nouveau salon.' }); else joinRoom(c, t); break; }
-        case 'quick': { const t = [...rooms.values()].find(x => x.public && x.phase === 'lobby' && x.players.size < MAX_PLAYERS); if (t) joinRoom(c, t); else create(c, true); break; }
+        case 'quick': { const t = rooms.get(OPEN_CODE); if (t.players.size < MAX_PLAYERS) joinRoom(c, t); else create(c, true); break; }
+        case 'open': joinRoom(c, rooms.get(OPEN_CODE)); break;
         case 'leave': leave(c); break;
         case 'settings':
           if (r && r.host === c.id && r.phase === 'lobby' && m.settings) {
@@ -110,14 +135,8 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
           }
           break;
         case 'start':
-          if (r && r.host === c.id && r.phase === 'lobby') {
-            r.phase = 'race'; r.seed = Math.random() * 10; r.firstFin = 0;
-            r.gunAt = Date.now() + 4000 + PRE * 1000 / r.settings.pace;
-            for (const p of r.players.values()) { p.s = null; p.leg = 0; p.d = 1e9; p.fin = null; p.ocs = false; p.seen = Date.now(); }
-            broadcast(r, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players });
-            broadcast(r, roomInfo(r));
-            log(`salon ${r.code} : départ (${r.players.size} joueurs)`);
-          }
+          // partie ouverte : n'importe qui peut donner le départ sans attendre
+          if (r && (r.host === c.id || r.permanent) && r.phase === 'lobby') startRace(r);
           break;
         case 'state':
           if (r && r.phase === 'race') {
@@ -147,13 +166,19 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
   // diffusion des positions (10 Hz), fin de course si tout le monde est arrivé ou délai dépassé
   const tick = setInterval(() => {
     for (const r of rooms.values()) {
+      // partie ouverte : départ automatique quand il y a du monde au ponton
+      if (r.permanent && r.phase === 'lobby') {
+        if (!r.players.size) r.autoAt = 0;
+        else if (!r.autoAt) { r.autoAt = Date.now() + autoDelay; broadcast(r, roomInfo(r)); }
+        else if (Date.now() >= r.autoAt) startRace(r);
+      }
       if (r.phase !== 'race') continue;
       const boats = [...r.players.values()].filter(p => p.s).map(p => ({ id: p.id, s: p.s, fin: p.fin }));
       broadcast(r, { type: 'states', t: Date.now(), boats });
       // 10 minutes réelles après le premier arrivé, ou 3 heures de course : on clôt
       // fin : 10 min après le premier arrivé, 3 h de course, ou plus personne ne navigue depuis 2 min
       const idle = [...r.players.values()].every(p => p.fin != null || Date.now() - (p.seen || 0) > 120000);
-      if ((r.firstFin && Date.now() - r.firstFin > 10 * 60 * 1000) || raceTime(r) > 3 * 3600 || idle) endRace(r);
+      if ((r.firstFin && Date.now() - r.firstFin > (r.permanent ? 3 : 10) * 60 * 1000) || raceTime(r) > 3 * 3600 || idle) endRace(r);
     }
   }, 100);
   // connexions mortes

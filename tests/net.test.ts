@@ -89,3 +89,30 @@ describe('serveur multijoueur', () => {
     a.close();
   });
 });
+
+describe('partie ouverte « Le Grand Large »', () => {
+  let s2: { port: number; close(): void };
+  beforeAll(async () => { s2 = await startServer({ port: 0, log: () => {}, autoDelay: 1500 }); });
+  afterAll(() => s2.close());
+  const cli = async (name: string) => {
+    const ws = new WebSocket(`ws://localhost:${s2.port}/ws`), msgs: any[] = [];
+    ws.on('message', (d: any) => msgs.push(JSON.parse(String(d)))); await new Promise(r => ws.on('open', r));
+    const send = (o: object) => ws.send(JSON.stringify(o)); send({ type: 'hello', name });
+    const wait = async (type: string, pred: (m: any) => boolean = () => true) => { const t0 = Date.now(); for (;;) { const m = msgs.find(x => x.type === type && pred(x)); if (m) { msgs.splice(msgs.indexOf(m), 1); return m; } if (Date.now() - t0 > 6000) throw new Error(name + ' : pas de ' + type); await new Promise(r => setTimeout(r, 10)); } };
+    return { ws, send, wait, msgs };
+  };
+  it('toujours là, sans code, départ automatique, réglages imposés, course rejointe en route', async () => {
+    const a = await cli('Alice');
+    a.send({ type: 'list' }); const l = await a.wait('rooms'); expect(l.rooms[0].permanent).toBe(true);
+    a.send({ type: 'open' }); const r = await a.wait('room'); expect(r.permanent).toBe(true); expect(r.host).toBeNull();
+    a.send({ type: 'settings', settings: { venue: 'lac' } }); await new Promise(res => setTimeout(res, 150));
+    const start = await a.wait('start'); // départ automatique (1,5 s dans ce test)
+    expect(start.settings.course).toBeTruthy();
+    const b = await cli('Bob'); b.send({ type: 'open' });
+    const late = await b.wait('start'); expect(late.late).toBe(true); expect(late.seed).toBe(start.seed);
+    // le salon vide n'est jamais fermé
+    a.ws.close(); b.ws.close(); await new Promise(res => setTimeout(res, 300));
+    const c = await cli('Chloé'); c.send({ type: 'open' }); const r2 = await c.wait('room'); expect(r2.code).toBe(r.code);
+    c.ws.close();
+  }, 20000);
+});

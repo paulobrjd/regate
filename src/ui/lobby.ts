@@ -1,6 +1,7 @@
 // Écran « Avec mes potes » : connexion, salons, réglages de l'hôte, lancement.
 import { Net, type RoomInfo, type StartMsg } from '../net/client';
 import { VENUES, activateVenue } from '../game/venue';
+import { METEO } from '../physics/wind';
 import { ASSISTS } from '../game/assist';
 import { $ } from './hud';
 
@@ -45,7 +46,12 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     $('netHome').hidden = !!r; $('netLobby').hidden = !r;
     if (!r) return;
     if (was) $('netLobby').scrollIntoView({ block: 'nearest' });
-    $('netRoomCode').textContent = r.code + (r.public ? ' (public)' : '');
+    $('netRoomCode').textContent = r.permanent ? (r.name ?? 'Le Grand Large') : r.code + (r.public ? ' (public)' : '');
+    $('netCopy').hidden = !!r.permanent;
+    { const { venue, courses } = activateVenue(r.settings.venue), c = courses.find(x => x.id === r.settings.course);
+      const sky: Record<string, string> = { soleil: 'grand soleil', nuageux: 'nuageux', pluie: 'pluie', brume: 'brume', couchant: 'coucher de soleil', nuit: 'de nuit' };
+      $('netNext').hidden = !r.permanent;
+      $('netNext').textContent = (r.phase === 'race' ? 'Course en cours : ' : 'Prochaine course : ') + venue.name + ' · ' + (c?.name ?? '') + ' · ' + METEO[r.settings.met].n + (sky[r.settings.sky] ? ' · ' + sky[r.settings.sky] : ''); }
     const ul = $('netPlayers');
     ul.innerHTML = r.players.map(() => '<li><span class="dot"></span><span></span><span class="note"></span></li>').join('');
     [...ul.children].forEach((li, i) => {
@@ -58,15 +64,33 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     $<HTMLInputElement>('nNoColl').disabled = !host;
     const st = r.settings;
     sel('nVenue').value = st.venue; fillCourses(st.venue, st.course); sel('nMet').value = String(st.met); sel('nSky').value = st.sky; sel('nPace').value = String(st.pace); sel('nSea').value = st.sea ?? 'auto'; $<HTMLInputElement>('nNoColl').checked = st.collisions === false;
-    $('netStart').hidden = !host || r.phase === 'race';
-    $('netAbort').hidden = !host || r.phase !== 'race';
+    $('netStart').hidden = !(host || r.permanent) || r.phase === 'race';
+    $('netStart').textContent = r.permanent ? 'Partir maintenant' : 'Lancer la course';
+    $('netAbort').hidden = !host || r.phase !== 'race' || !!r.permanent;
+    for (const id of ['nVenue', 'nCourse', 'nMet', 'nSky', 'nPace', 'nSea', 'nNoColl']) (sel(id).closest('label') as HTMLElement).style.display = r.permanent ? 'none' : '';
+    $('netCodeLbl').textContent = r.permanent ? 'Partie ouverte : ' : 'Code du salon : ';
+    hint(r);
+    if (r.permanent) { msg(r.players.length + ' marin' + (r.players.length > 1 ? 's' : '') + ' au ponton du Grand Large · ping ' + net.ping_ms + ' ms'); return; }
     $('netHint').textContent = r.phase === 'race' ? (host ? 'Course en cours. Tes potes peuvent encore la rejoindre avec le code.' : 'Course en cours…') : host
       ? (r.players.length < 2 ? 'Envoie le code (ou le lien) à tes potes. Tu peux aussi lancer seul pour essayer.' : 'Tout le monde est là ? Lance la course : le départ est donné 1 minute de jeu plus tard.')
       : 'L\'hôte règle la course et la lance.';
     msg(r.players.length + ' marin' + (r.players.length > 1 ? 's' : '') + ' dans le salon · ping ' + net.ping_ms + ' ms');
   };
+  /** Compte à rebours du départ automatique de la partie ouverte. */
+  function hint(r: RoomInfo): void {
+    if (!r.permanent) return;
+    if (r.phase === 'race') { $('netHint').textContent = 'Une course est en cours : tu la rejoins directement en partant de la ligne. Ou attends la suivante ici.'; return; }
+    const s = r.autoAt ? Math.max(0, Math.ceil((r.autoAt - net.serverNow()) / 1000)) : 0;
+    $('netHint').textContent = r.autoAt ? 'Départ automatique dans ' + s + ' s (le temps que d\'autres arrivent). Tu peux aussi partir maintenant.' : 'Le départ est donné tout seul dès qu\'il y a du monde.';
+  }
+  setInterval(() => { if (net.room?.permanent && !$('netLobby').hidden) hint(net.room); }, 1000);
   net.onRoom = r => { if (!h.isRacing()) render(r); else if (r) render(r); };
   net.onRooms = list => {
+    const open = list.find(r => r.permanent);
+    if (open) $('netOpenInfo').textContent = open.players
+      ? open.players + ' marin' + (open.players > 1 ? 's' : '') + ' en ce moment · ' + (open.phase === 'race' ? 'course en cours, rejoins-la !' : 'départ bientôt')
+      : 'Partie ouverte à tous, toujours là : entre directement';
+    list = list.filter(r => !r.permanent);
     const ul = $('netRooms');
     ul.innerHTML = list.length ? list.map(r => `<li data-code="${r.code}" style="cursor:pointer"><span class="dot" style="background:#3ddc97"></span><span></span><span class="note">${r.players} joueur${r.players > 1 ? 's' : ''} · ${r.phase === 'race' ? 'en course' : 'au ponton'}</span></li>`).join('') : '<li class="note">Aucun salon public pour l\'instant : crée le tien !</li>';
     [...ul.querySelectorAll<HTMLElement>('li[data-code]')].forEach((li, i) => { li.children[1].textContent = list[i].name; li.onclick = async () => { if (await ensure()) net.send({ type: 'join', code: li.dataset.code }); }; });
@@ -98,6 +122,7 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
   net.onStart = m => h.onStart(m);
   setInterval(() => { if (net.connected) { net.ping(); if (!net.room) net.send({ type: 'list' }); } }, 2000);
 
+  $('netOpen').onclick = async () => { if (await ensure()) net.send({ type: 'open' }); };
   $('netCreate').onclick = async () => { if (await ensure()) net.send({ type: 'create', public: false }); };
   $('netQuick').onclick = async () => { if (await ensure()) net.send({ type: 'quick' }); };
   $('netJoin').onclick = join;
@@ -119,7 +144,10 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
 
   // lien d'invitation : ?salon=ABCD
   const invite = new URLSearchParams(location.search).get('salon');
-  const openTab = async () => { if (await ensure() && invite && !net.room) net.send({ type: 'join', code: invite.toUpperCase() }); };
+  const openTab = async () => {
+    // l'onglet se connecte tout de suite pour afficher qui est au Grand Large
+    if (await ensure() && invite && !net.room) net.send({ type: 'join', code: invite.toUpperCase() });
+  };
   if (invite) $<HTMLInputElement>('netCode').value = invite.toUpperCase();
   return { openTab };
 }

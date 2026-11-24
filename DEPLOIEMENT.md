@@ -72,7 +72,9 @@ Compte environ **20 minutes** la première fois. Tu n'as besoin d'aucune carte b
 5. Quand tout le monde est là, clique sur **Lancer la course**. Le départ est donné une minute de jeu plus tard,
    pour tout le monde en même temps.
 
-Jusqu'à **8 joueurs** par salon. **Partie rapide** te met dans un salon public avec des inconnus.
+Jusqu'à **15 joueurs** par salon.
+
+**Le Grand Large** : une partie ouverte à tous, toujours disponible, sans code. Le départ est donné automatiquement 45 secondes après l'arrivée du premier marin (ou tout de suite avec « Partir maintenant ») ; si une course est en cours, on la rejoint directement. Le plan d'eau, le parcours et la météo changent à chaque course.
 
 ---
 

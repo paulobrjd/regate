@@ -217,6 +217,7 @@ function tab(isNet: boolean): void {
 }
 if (new URLSearchParams(location.search).get('salon')) tab(true); // lien d'invitation
 $('tSolo').addEventListener('click', () => tab(false));
+$('toOpen').addEventListener('click', e => { e.preventDefault(); tab(true); $('netOpen').scrollIntoView({ block: 'nearest' }); });
 $('tNet').addEventListener('click', () => tab(true));
 $('goBtn').addEventListener('click', startSolo);
 $('resumeBtn').addEventListener('click', resume);
