@@ -48,7 +48,13 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
   function leave(c) {
     const r = c.room; if (!r) return;
     r.players.delete(c.id); c.room = null;
-    if (r.players.size === 0) { rooms.delete(r.code); log(`salon ${r.code} fermé`); return; }
+    if (r.players.size === 0) {
+      // salon vide : on le garde 3 minutes (téléphone en veille, page rechargée…)
+      if (r.phase === 'race') endRace(r);
+      clearTimeout(r.closeT);
+      r.closeT = setTimeout(() => { if (r.players.size === 0) { rooms.delete(r.code); log(`salon ${r.code} fermé`); } }, 3 * 60 * 1000);
+      return;
+    }
     if (r.host === c.id) r.host = r.players.keys().next().value;
     broadcast(r, roomInfo(r));
     if (r.phase === 'race' && [...r.players.values()].every(q => q.fin != null)) endRace(r);
@@ -58,6 +64,8 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     leave(c);
     const used = new Set([...r.players.values()].map(p => p.col));
     const col = COLS.find(x => !used.has(x)) || COLS[0];
+    clearTimeout(r.closeT);
+    if (!r.players.size) r.host = c.id; // le salon vide revient au premier qui revient
     r.players.set(c.id, { id: c.id, name: c.name, col, ws: c.ws, s: null, leg: 0, d: 1e9, fin: null, ocs: false, seen: Date.now() });
     c.room = r;
     broadcast(r, roomInfo(r));
@@ -89,7 +97,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
         case 'hello': c.name = String(m.name || 'Marin').replace(/[<>]/g, '').trim().slice(0, 14) || 'Marin'; break;
         case 'list': send(ws, { type: 'rooms', rooms: publicList() }); break;
         case 'create': create(c, m.public); break;
-        case 'join': { const t = rooms.get(String(m.code || '').toUpperCase().trim()); if (!t) send(ws, { type: 'error', msg: 'Aucun salon avec ce code.' }); else joinRoom(c, t); break; }
+        case 'join': { const t = rooms.get(String(m.code || '').toUpperCase().trim()); if (!t) send(ws, { type: 'error', msg: 'Aucun salon avec le code ' + String(m.code || '').toUpperCase().trim() + '. Vérifie les 4 lettres, ou demande à ton pote de créer un nouveau salon.' }); else joinRoom(c, t); break; }
         case 'quick': { const t = [...rooms.values()].find(x => x.public && x.phase === 'lobby' && x.players.size < MAX_PLAYERS); if (t) joinRoom(c, t); else create(c, true); break; }
         case 'leave': leave(c); break;
         case 'settings':

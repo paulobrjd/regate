@@ -97,6 +97,7 @@ body.fs-open{overflow:hidden}
 .rbar input[type=range]{flex:1;accent-color:var(--buoy);min-height:0}
 .rbar #rTime{font:800 18px "Barlow Condensed",sans-serif;min-width:5.5em;text-align:center;font-variant-numeric:tabular-nums}
 body.replaying .gbtns{display:none!important}
+#netJoinMsg{margin:-6px 0 10px;font-weight:600}#netJoinMsg.err{color:#e8384f}#netJoinMsg.ok{color:#1f9d6b}
 .pad .route{background:var(--buoy);color:#fff;border-color:var(--buoy)}.pad .route kbd{color:#fff}.pad button.route.on{filter:brightness(.85)}
 details.keys{flex:1 1 100%}
 details.keys summary{cursor:pointer;font-weight:600;color:var(--ink);margin-bottom:8px}

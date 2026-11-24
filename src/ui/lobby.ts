@@ -40,8 +40,11 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
 
   const isHost = () => !!net.room && net.room.host === net.id;
   const render = (r: RoomInfo | null) => {
+    if (r) { lastCode = r.code; joining = ''; $('netJoin').textContent = 'Rejoindre'; jmsg(''); }
+    const was = $('netLobby').hidden;
     $('netHome').hidden = !!r; $('netLobby').hidden = !r;
     if (!r) return;
+    if (was) $('netLobby').scrollIntoView({ block: 'nearest' });
     $('netRoomCode').textContent = r.code + (r.public ? ' (public)' : '');
     const ul = $('netPlayers');
     ul.innerHTML = r.players.map(() => '<li><span class="dot"></span><span></span><span class="note"></span></li>').join('');
@@ -68,15 +71,40 @@ export function initLobby(h: LobbyHooks): { openTab(): void } {
     ul.innerHTML = list.length ? list.map(r => `<li data-code="${r.code}" style="cursor:pointer"><span class="dot" style="background:#3ddc97"></span><span></span><span class="note">${r.players} joueur${r.players > 1 ? 's' : ''} · ${r.phase === 'race' ? 'en course' : 'au ponton'}</span></li>`).join('') : '<li class="note">Aucun salon public pour l\'instant : crée le tien !</li>';
     [...ul.querySelectorAll<HTMLElement>('li[data-code]')].forEach((li, i) => { li.children[1].textContent = list[i].name; li.onclick = async () => { if (await ensure()) net.send({ type: 'join', code: li.dataset.code }); }; });
   };
-  net.onError = m => msg(m);
-  net.onClose = () => { msg('Connexion perdue. Réessaie dans un instant.'); render(null); };
+  const jmsg = (t: string, kind = '') => { const e = $('netJoinMsg'); e.textContent = t; e.className = 'note ' + kind; };
+  let joining = '', lastCode = '';
+  net.onError = m => { msg(m); jmsg(m, 'err'); joining = ''; $('netJoin').textContent = 'Rejoindre'; };
+  // coupure (téléphone en veille, réseau) : on se reconnecte et on revient dans le salon
+  net.onClose = async () => {
+    const code = lastCode; render(null);
+    if (!code) { msg('Connexion perdue. Réessaie dans un instant.'); return; }
+    msg('Connexion perdue : reconnexion…');
+    for (let i = 0; i < 6; i++) {
+      await new Promise(r => setTimeout(r, 1500 + i * 1500));
+      try { await net.connect(name()); net.send({ type: 'join', code }); return; } catch { /* on réessaie */ }
+    }
+    msg('Impossible de se reconnecter. Recharge la page et rejoins le salon avec son code (' + code + ').');
+  };
+  const join = async () => {
+    const c = $<HTMLInputElement>('netCode').value.toUpperCase().replace(/[^A-Z]/g, '');
+    $<HTMLInputElement>('netCode').value = c;
+    if (c.length !== 4) { jmsg('Le code fait 4 lettres (par exemple ABCD).', 'err'); return; }
+    if (joining === c) return;
+    joining = c; $('netJoin').textContent = 'Connexion…'; jmsg('Connexion au salon ' + c + '…');
+    if (await ensure()) net.send({ type: 'join', code: c });
+    else { joining = ''; $('netJoin').textContent = 'Rejoindre'; jmsg('Serveur injoignable : attends une minute (il se réveille) puis réessaie.', 'err'); }
+    setTimeout(() => { if (joining === c) { joining = ''; $('netJoin').textContent = 'Rejoindre'; if (!net.room) jmsg('Pas de réponse du serveur. Réessaie.', 'err'); } }, 10000);
+  };
   net.onStart = m => h.onStart(m);
   setInterval(() => { if (net.connected) { net.ping(); if (!net.room) net.send({ type: 'list' }); } }, 2000);
 
   $('netCreate').onclick = async () => { if (await ensure()) net.send({ type: 'create', public: false }); };
   $('netQuick').onclick = async () => { if (await ensure()) net.send({ type: 'quick' }); };
-  $('netJoin').onclick = async () => { const c = $<HTMLInputElement>('netCode').value.trim().toUpperCase(); if (c.length === 4 && await ensure()) net.send({ type: 'join', code: c }); else if (c.length !== 4) msg('Le code fait 4 lettres.'); };
-  $('netLeave').onclick = () => { net.send({ type: 'leave' }); net.room = null; render(null); net.send({ type: 'list' }); };
+  $('netJoin').onclick = join;
+  $('netCode').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); void join(); } });
+  // dès que les 4 lettres sont tapées, on rejoint
+  $('netCode').addEventListener('input', () => { const c = $<HTMLInputElement>('netCode').value.replace(/[^a-zA-Z]/g, ''); if (c.length === 4) void join(); else jmsg(''); });
+  $('netLeave').onclick = () => { lastCode = ''; net.send({ type: 'leave' }); net.room = null; render(null); net.send({ type: 'list' }); };
   $('netStart').onclick = () => net.send({ type: 'start' });
   $('netAbort').onclick = () => net.send({ type: 'abort' });
   $('netCopy').onclick = async () => {
