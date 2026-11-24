@@ -11,22 +11,27 @@ import { headAngle, mainAngle } from '../physics/model';
 T.ColorManagement.enabled = false;
 const f = (v: number) => v.toFixed(5);
 
-import { HZ, HW, deckY, MAST_Z, DECK, WINCHES, TRAV_T, buildImoca, mainTex, headTex, mats } from './imoca';
+import { HZ, HW, deckY, MAST_Z, DECK, WINCHES, TRAV_T, EXT_L, buildImoca, mainTex, headTex } from './imoca';
 import { Rope, braidTex } from './rope';
 import { Decor } from './decor';
+import { Skipper } from './skipper';
 
 const NU = 12, NV = 22;
 
 interface Rec {
   yaw: T.Group; roll: T.Group; boomG: T.Group; mast: T.Mesh; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[];
   mg: T.BufferGeometry; hg: T.BufferGeometry; hmesh: T.Mesh<T.BufferGeometry, T.MeshStandardMaterial>;
-  sailor: T.Group; armL: T.Mesh; armR: T.Mesh; head: T.Mesh;
+  skipper: Skipper; navG: T.Group; tillerExt: T.Group; handles: T.Group[]; pedCrank: T.Group;
   car: T.Mesh; tiller: T.Group; winches: { g: T.Group; i: number; sx: number }[];
   /** Cordages en 3D (bateau du joueur). */
   tubes?: { lee: Rope; wind: Rope; main: Rope; light: T.PointLight; lastHead: number; lastMain: number; lastLee: number };
   ropes: T.LineSegments; ropePos: Float32Array; ropeCol: Float32Array; clew: T.Vector3;
   /** Skipper : position sur le pont (x, t), activité et minuterie. */
-  sk: { x: number; t: number; mode: 'helm' | 'grind' | 'pedestal'; timer: number; tack: number };
+  sk: { x: number; t: number; mode: 'helm' | 'grind' | 'trim' | 'pedestal'; timer: number; tack: number; walk: number; lastHead: number; lastMain: number; trimT: number; mainT: number; crank: number; yaw: number };
+  /** Main qui tient le mou de l'écoute (coordonnées du pont), quand le skipper reprend un bout. */
+  tailHand: T.Vector3 | null;
+  /** Voiles vivantes : bôme sur ressort amorti, faseyement progressif, creux qui respire. */
+  sail: { boom: number; boomV: number; luffM: number; luffH: number; breath: number; side: number };
   lb: T.Sprite; name: string; heel: number; used: boolean; sideS?: number; prevS?: number; headId: string;
 }
 interface Drop { x: number; y: number; z: number; vx: number; vy: number; vz: number; a: number }
@@ -62,7 +67,11 @@ export class Scene3D {
   private arcPts: { x: number; z: number; h: number }[] = [];
   private projV = new T.Vector3();
   // ciel, météo, plan d'eau
-  private FOG!: T.Color; private skyTop = new T.Color('#2569ad');
+  private FOG!: T.Color; private skyTop = new T.Color('#2569ad'); private glow = new T.Color(1, 0.88, 0.65);
+  // nuit : étoiles, feux de navigation, phares, bouées à éclats
+  private night = false; private stars!: T.Points; private foamLum = new T.Color(0.95, 0.97, 1);
+  private beams: { g: T.Group; ph: number }[] = [];
+  private glowTex: T.Texture | null = null;
   private hemi!: T.HemisphereLight; private amb!: T.AmbientLight;
   private envScene!: T.Scene;
   private clouds: { sp: T.Sprite; op: number }[] = [];
@@ -93,9 +102,9 @@ export class Scene3D {
     this.FOG = FOG;
     scene.add(new T.Mesh(new T.SphereGeometry(20000, 32, 16), new T.ShaderMaterial({
       side: T.BackSide, depthWrite: false, fog: false,
-      uniforms: { top: { value: this.skyTop }, hor: { value: FOG }, sun: { value: sunDir } },
+      uniforms: { top: { value: this.skyTop }, hor: { value: FOG }, sun: { value: sunDir }, glow: { value: this.glow } },
       vertexShader: 'varying vec3 vP;void main(){vP=normalize(position);vec4 p=modelViewMatrix*vec4(position,1.);gl_Position=projectionMatrix*p;gl_Position.z=gl_Position.w*.99999;}',
-      fragmentShader: 'uniform vec3 top,hor,sun;varying vec3 vP;void main(){float h=clamp(vP.y*1.8,0.,1.);vec3 c=mix(hor,top,pow(h,.5));float s=max(dot(vP,sun),0.);c+=vec3(1.,.88,.65)*(pow(s,900.)*3.+pow(s,10.)*.22);gl_FragColor=vec4(c,1.);}',
+      fragmentShader: 'uniform vec3 top,hor,sun,glow;varying vec3 vP;void main(){float h=clamp(vP.y*1.8,0.,1.);vec3 c=mix(hor,top,pow(h,.5));float s=max(dot(vP,sun),0.);c+=glow*(pow(s,900.)*3.+pow(s,10.)*.22);gl_FragColor=vec4(c,1.);}',
     })));
     this.hemi = new T.HemisphereLight('#e4f3ff', '#1d5a7a', 0.75 * Math.PI); scene.add(this.hemi);
     this.amb = new T.AmbientLight('#ffffff', 0.25 * Math.PI); scene.add(this.amb);
@@ -136,6 +145,14 @@ export class Scene3D {
       this.clouds.push({ sp, op: sp.material.opacity });
     }
 
+    // étoiles (visibles la nuit)
+    {
+      const N = 2200, pos = new Float32Array(N * 3);
+      for (let i = 0; i < N; i++) { const a = Math.random() * TAU, e = Math.asin(Math.random() * 0.98 + 0.02), r = 15000; pos.set([Math.cos(a) * Math.cos(e) * r, Math.sin(e) * r, Math.sin(a) * Math.cos(e) * r], i * 3); }
+      const g = new T.BufferGeometry(); g.setAttribute('position', new T.BufferAttribute(pos, 3));
+      this.stars = new T.Points(g, new T.PointsMaterial({ color: '#ffffff', size: 1.6, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.9, depthWrite: false }));
+      this.stars.visible = false; this.stars.frustumCulled = false; scene.add(this.stars);
+    }
     // mer : grille radiale (dense près de la caméra, jusqu'à 12 km)
     const gN = this.gN;
     this.gData = new Uint8Array(gN * gN);
@@ -291,8 +308,26 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       const th = 0.6, R = shoreR(isl, th) * 0.75, x = isl.x + Math.cos(th) * R, z = isl.y + Math.sin(th) * R, y0 = islandHeight(isl, th, 0.75) - 1;
       const ph = new T.Mesh(new T.CylinderGeometry(3, 4.2, 30, 12), new T.MeshLambertMaterial({ color: '#f2f2f2' })); ph.position.set(x, y0 + 15, z); grp.add(ph);
       const tp = new T.Mesh(new T.CylinderGeometry(3.3, 3.3, 6, 12), new T.MeshLambertMaterial({ color: '#c8371e' })); tp.position.set(x, y0 + 33, z); grp.add(tp);
+      // la nuit : lanterne et deux faisceaux qui balaient l'horizon
+      const bg = new T.Group(); bg.position.set(x, y0 + 37, z); bg.visible = this.night; grp.add(bg);
+      const lamp = this.glowSprite('#fff4c8', 0.05); bg.add(lamp);
+      const cone = new T.ConeGeometry(260, 4200, 24, 1, true); cone.translate(0, -2100, 0); cone.rotateZ(Math.PI / 2);
+      const beamM = new T.MeshBasicMaterial({ color: '#fff2c0', transparent: true, opacity: 0.07, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide, fog: false });
+      for (const r of [0, Math.PI]) { const m = new T.Mesh(cone, beamM); m.rotation.y = r; bg.add(m); }
+      this.beams.push({ g: bg, ph: isl.seed });
     }
     return grp;
+  }
+
+  /** Halo lumineux (feu de navigation, lanterne) : taille fixe à l'écran. */
+  private glowSprite(col: string, size: number): T.Sprite {
+    if (!this.glowTex) {
+      const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d')!, g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+      g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.2, 'rgba(255,255,255,.8)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64);
+      this.glowTex = new T.CanvasTexture(c);
+    }
+    const sp = new T.Sprite(new T.SpriteMaterial({ map: this.glowTex, color: col, transparent: true, blending: T.AdditiveBlending, depthWrite: false, sizeAttenuation: false, fog: false }));
+    sp.scale.set(size, size, 1); sp.renderOrder = 9; return sp;
   }
 
   private label(text: string, bg: string): T.Sprite {
@@ -308,6 +343,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     const g = new T.Group(), m = new T.MeshPhongMaterial({ color: col, shininess: 40 });
     const c = new T.Mesh(new T.CylinderGeometry(1.1 * s, 1.3 * s, 3 * s, 20), m); c.position.y = 1 * s; g.add(c);
     const tp = new T.Mesh(new T.SphereGeometry(1.1 * s, 18, 9), m); tp.position.y = 2.5 * s; g.add(tp);
+    { const fl = this.glowSprite('#ffe27a', 0.035); fl.position.y = (txt ? 9 : 3.4) * s; fl.visible = false; g.add(fl); g.userData.flash = fl; }
     if (txt) {
       const pole = new T.Mesh(new T.CylinderGeometry(0.06 * s, 0.08 * s, 6 * s, 8), new T.MeshStandardMaterial({ color: '#e9eef2', roughness: 0.4 })); pole.position.y = 5.5 * s; g.add(pole);
       const fl = new T.Mesh(new T.PlaneGeometry(1.8 * s, 1.1 * s), new T.MeshBasicMaterial({ color: col, side: T.DoubleSide })); fl.position.set(0.95 * s, 7.8 * s, 0); g.add(fl);
@@ -349,44 +385,44 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
   }
 
   private mkBoat(b: Boat, num: string): Rec {
-    const M = mats();
     const yaw = new T.Group(), roll = new T.Group(); yaw.add(roll);
     const parts = buildImoca(roll, b.col, b.name, num);
     const mg = this.grid(), main = new T.Mesh(mg, new T.MeshStandardMaterial({ map: mainTex(num, b.col, b.name), side: T.DoubleSide, roughness: 0.55, metalness: 0.05 }));
     main.castShadow = true; parts.boomG.add(main);
     const hg = this.grid(), hmesh = new T.Mesh(hg, new T.MeshStandardMaterial({ map: this.headMap('J1', b.col), side: T.DoubleSide, roughness: 0.6, transparent: true, opacity: 0.97 }));
     hmesh.castShadow = true; roll.add(hmesh);
-    // skipper en ciré, casque
-    const sailor = new T.Group(); roll.add(sailor);
-    const jacket = new T.MeshStandardMaterial({ color: b.col, roughness: 0.6 }), pants = new T.MeshStandardMaterial({ color: '#23292e', roughness: 0.8 });
-    const torso = new T.Mesh(new T.CapsuleGeometry(0.2, 0.42, 4, 10), jacket); torso.position.y = 1.02; sailor.add(torso);
-    const head = new T.Mesh(new T.SphereGeometry(0.13, 14, 10), M.skin); head.position.y = 1.5; sailor.add(head);
-    const helmet = new T.Mesh(new T.SphereGeometry(0.145, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), new T.MeshStandardMaterial({ color: '#f4f4f2', roughness: 0.3 })); helmet.position.y = 1.53; head.add(helmet); helmet.position.set(0, 0.03, 0);
-    for (const sx of [-1, 1]) { const leg = new T.Mesh(new T.CapsuleGeometry(0.09, 0.55, 4, 8), pants); leg.position.set(sx * 0.11, 0.4, 0); sailor.add(leg); }
-    const armG = new T.CapsuleGeometry(0.065, 0.45, 4, 8); armG.rotateX(Math.PI / 2); armG.translate(0, 0, -0.26);
-    const armL = new T.Mesh(armG, jacket), armR = armL.clone();
-    armL.position.set(-0.26, 1.22, 0); armR.position.set(0.26, 1.22, 0); sailor.add(armL, armR);
-    sailor.traverse(o => { (o as T.Mesh).castShadow = true; });
+    // feux de navigation (la nuit) : tricolore en tête de mât, rouge à bâbord, vert à tribord, blanc arrière
+    const navG = new T.Group(); navG.visible = false; roll.add(navG);
+    { const top = DECK + 29.2;
+      const tri = [['#ff3b30', -0.15, top, MAST_Z - 0.1], ['#33ff77', 0.15, top, MAST_Z - 0.1], ['#ffffff', 0, top + 0.05, MAST_Z + 0.2]] as const;
+      for (const [c, x, y, z] of tri) { const sp = this.glowSprite(c, 0.022); sp.position.set(x, y, z); navG.add(sp); }
+      for (const [c, sx] of [['#ff3b30', -1], ['#33ff77', 1]] as const) { const sp = this.glowSprite(c, 0.03); sp.position.set(sx * HW(0.04) * 0.9, deckY(0.04, 0.9) + 0.7, HZ(0.04)); navG.add(sp); }
+      const st = this.glowSprite('#ffffff', 0.028); st.position.set(0, deckY(0.99, 0) + 0.7, HZ(0.995)); navG.add(st); }
+    // skipper articulé
+    const skipper = new Skipper(b.col); roll.add(skipper.root);
     const lb = this.label(b.name, 'rgba(4,30,50,.6)'); lb.position.y = 33; yaw.add(lb);
     this.scene.add(yaw);
     // cordages : écoutes, grand-écoute, tours sur les winchs (mis à jour à chaque image)
     const RN = 400, ropePos = new Float32Array(RN * 6), ropeCol = new Float32Array(RN * 6);
     const rg = new T.BufferGeometry(); rg.setAttribute('position', new T.BufferAttribute(ropePos, 3)); rg.setAttribute('color', new T.BufferAttribute(ropeCol, 3));
     const ropes = new T.LineSegments(rg, new T.LineBasicMaterial({ vertexColors: true })); ropes.frustumCulled = false; roll.add(ropes);
-    return { yaw, roll, boomG: parts.boomG, mast: parts.mast, keelG: parts.keelG, foilP: parts.foilP, foilS: parts.foilS, ruds: parts.ruds, mg, hg, hmesh, sailor, armL, armR, head, lb, name: b.name, heel: 0, used: true, headId: '',
-      car: parts.car, tiller: parts.tiller, winches: parts.winches, ropes, ropePos, ropeCol, clew: new T.Vector3(), sk: { x: -1.6, t: 0.955, mode: 'helm', timer: 0, tack: 0 } };
+    return { yaw, roll, boomG: parts.boomG, mast: parts.mast, keelG: parts.keelG, foilP: parts.foilP, foilS: parts.foilS, ruds: parts.ruds, mg, hg, hmesh, skipper, tillerExt: parts.tillerExt, handles: parts.handles, pedCrank: parts.pedCrank, navG, tailHand: null, sail: { boom: 0, boomV: 0, luffM: 0, luffH: 0, breath: 1, side: 1 }, lb, name: b.name, heel: 0, used: true, headId: '',
+      car: parts.car, tiller: parts.tiller, winches: parts.winches, ropes, ropePos, ropeCol, clew: new T.Vector3(), sk: { x: -1.55, t: 0.905, mode: 'helm', timer: 0, tack: 0, walk: 0, lastHead: -1, lastMain: -1, trimT: 0, mainT: 0, crank: 0, yaw: 0 } };
   }
 
   /** Grand-voile : guindant le long du mât, bordure sur la bôme, rond de chute et tête carrée. */
-  private setMain(g: T.BufferGeometry, side: number, h: number, camber: number, fl: boolean, tm: number): void {
+  private setMain(g: T.BufferGeometry, side: number, h: number, camber: number, luff: number, tm: number, aws: number): void {
     const p = (g.attributes.position as T.BufferAttribute).array as Float32Array; let k = 0;
+    const flut = 0.02 + Math.min(0.05, aws * 0.0015) + luff * 0.32, speed = 14 + aws * 0.4 + luff * 10;
     for (let j = 0; j <= NV; j++) {
       const v = j / NV, ch = 7.0 * (1 - v) + 2.9 * v + 1.1 * Math.sin(Math.PI * Math.pow(v, 0.8)) * (1 - v * 0.3);
       const twist = 0.22 * v * v;
+      const batten = 0.35 + 0.65 * Math.abs(Math.sin(Math.PI * v * 9)); // les lattes raidissent la toile
       for (let i = 0; i <= NU; i++) {
         const u = i / NU, bulge = 4 * u * (1 - u) * (1 - 0.35 * u);
         let x = side * camber * ch * 0.13 * bulge * (1 - v * 0.25) + side * u * ch * twist;
-        if (fl) x += Math.sin(tm * 20 + u * 9 + v * 5) * 0.28 * u;
+        // ondulation qui court du guindant vers la chute, plus forte sur la chute
+        x += Math.sin(tm * speed - u * 7 + v * 4) * flut * Math.pow(u, 1.6) * batten + Math.sin(tm * speed * 1.7 - u * 13) * flut * 0.3 * Math.pow(u, 3);
         p[k++] = x; p[k++] = v * h + 0.05; p[k++] = u * ch - 0.1 * Math.sin(Math.PI * v) ;
       }
     }
@@ -394,7 +430,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
   }
 
   /** Voile d'avant : point d'amure, tête, point d'écoute selon l'angle d'écoute delta (°). */
-  private setHead(r: Rec, b: Boat, side: number, delta: number, pow: number, fl: boolean, tm: number): void {
+  private setHead(r: Rec, b: Boat, side: number, delta: number, pow: number, luff: number, tm: number): void {
     const s = b.cls.heads[b.head], id = s.id;
     const geo = { J1: [0.1, 24.8, 7.4, 0.5, 0.11], J2: [0.3, 22.5, 6.4, 0.9, 0.1], J3: [2.6, 17.3, 4.6, 1.4, 0.09], C0: [-2.3, 28.3, 10, 0.9, 0.09], A3: [-2.3, 28.3, 12.5, 1.4, 0.3] }[id] ?? [0, 25, 7, 1.3, 0.1];
     const [tz, hh, foot, clewH, belly] = geo;
@@ -410,8 +446,9 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       for (let i = 0; i <= NU; i++) {
         const u = i / NU; R.lerpVectors(P, Q, u);
         const bl = Math.sin(Math.PI * u) * Math.sin(Math.PI * Math.min(1, v * 1.02 + 0.03)) * belly * len * (isGen ? 1 : 1 - v * 0.5);
-        const fx = fl ? Math.sin(tm * 24 + u * 7 + v * 5) * 0.2 * (1 - u * 0.5) * (1 - v) : 0;
-        R.x += side * (bl + fx * (isGen ? 2 : 1)); if (isGen) R.z -= bl * 0.6;
+        const amp = 0.015 + luff * 0.28, fx = Math.sin(tm * (18 + luff * 10) - u * 8 + v * 5) * amp * (0.3 + u) * (1 - v * 0.7);
+        const curl = luff * 0.5 * Math.sin(Math.PI * v) * Math.pow(1 - u, 3); // le guindant se creuse (contre-gîte)
+        R.x += side * (bl * (1 - 0.8 * luff) + fx * (isGen ? 2 : 1) - curl); if (isGen) R.z -= bl * 0.6 * (1 - 0.6 * luff);
         p[k++] = R.x; p[k++] = R.y; p[k++] = R.z;
       }
     }
@@ -440,9 +477,9 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     const g = new T.BufferGeometry(), pos = new Float32Array(n * 3), age = new Float32Array(n);
     g.setAttribute('position', new T.BufferAttribute(pos, 3)); g.setAttribute('age', new T.BufferAttribute(age, 1));
     const m = new T.ShaderMaterial({
-      transparent: true, depthWrite: false, uniforms: { tex: { value: this.dotTex } },
+      transparent: true, depthWrite: false, uniforms: { tex: { value: this.dotTex }, lum: { value: this.foamLum } },
       vertexShader: `attribute float age;varying float vA;void main(){vec4 mv=modelViewMatrix*vec4(position,1.);vA=age;gl_PointSize=min((${sz[0].toFixed(2)}+age*${sz[1].toFixed(2)})*300./-mv.z,${sz[2]}.);gl_Position=projectionMatrix*mv;}`,
-      fragmentShader: `uniform sampler2D tex;varying float vA;void main(){float a=texture2D(tex,gl_PointCoord).a*(1.-vA/${life.toFixed(2)})*${alpha};gl_FragColor=vec4(.95,.97,1.,a);}`,
+      fragmentShader: `uniform sampler2D tex;uniform vec3 lum;varying float vA;void main(){float a=texture2D(tex,gl_PointCoord).a*(1.-vA/${life.toFixed(2)})*${alpha};gl_FragColor=vec4(lum,a);}`,
     });
     const o = new T.Points(g, m); o.frustumCulled = false; this.scene.add(o);
     return { g, pos, age, n };
@@ -461,17 +498,29 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     if (r.sideS == null) r.sideS = -tack;
     // côté de la bôme : sous le vent (le vent vient de bâbord quand tack > 0 → bôme à tribord, +x)
     const gy = aa > 100, rate = dt * (gy ? 5 : 1.4); r.sideS += clamp(tack - r.sideS, -rate, rate);
-    const ss = r.sideS, sa = Math.abs(ss);
-    if (isMe && r.prevS != null && Math.sign(ss) !== Math.sign(r.prevS) && ss !== 0) this.onBoom(gy);
-    r.prevS = ss;
-    const md = mainAngle(b.mainSheet, b.trav), mf = b.knock > 0 || aa < md + 2;
-    r.boomG.rotation.y = ss * clamp(md, -6, 85) * D * sa;
+    const ss = r.sideS;
+    const md = mainAngle(b.mainSheet, b.trav), sl = r.sail;
+    // faseyement progressif (0 = voile pleine, 1 = elle bat) et creux qui respire avec le vent
+    const luffT = b.knock > 0 ? 1 : clamp((md + 4 - aa) / 10, 0, 1);
+    sl.luffM += (luffT - sl.luffM) * Math.min(1, dt * 3);
+    sl.breath += ((0.9 + Math.min(0.2, b.aws / 120)) * (1 + 0.06 * Math.sin(tm * 1.7 + X * 0.1)) - sl.breath) * Math.min(1, dt * 2);
+    // bôme : poussée par le vent vers son angle d'écoute, elle balance et dépasse (ressort amorti)
+    const lee = b.awa >= 0 ? 1 : -1, target = lee * clamp(md, -6, 85) * D * (b.knock > 0 ? 0.5 : 1);
+    const kSpring = 9 + 14 * (1 - sl.luffM), cDamp = 2.6 + 3 * (1 - sl.luffM);
+    const prevV = sl.boomV;
+    sl.boomV += (kSpring * (target - sl.boom) - cDamp * sl.boomV) * Math.min(dt, 0.05);
+    sl.boom += sl.boomV * Math.min(dt, 0.05);
+    if (isMe && Math.abs(prevV) > 1.2 && Math.sign(prevV) !== Math.sign(sl.boomV) && Math.abs(sl.boom) > 0.6) this.onBoom(true); // la bôme arrive en butée
+    r.boomG.rotation.y = sl.boom;
+    if (Math.abs(sl.boom) > 0.02) sl.side = Math.sign(sl.boom);
     r.mast.rotation.y = r.boomG.rotation.y * 0.45; // mât-aile pivotant
     const reefH = [27, 23.5, 20, 16.5][b.reefs];
-    const camber = mf ? 0.05 : 0.6 + 0.5 * clamp(1 - Math.abs(b.mainSheet - b.ideal.mainSheet) * 3, 0, 1);
-    this.setMain(r.mg, ss, reefH * (0.6 + 0.4 * b.mainPow), camber, mf, tm + X);
-    const head = b.cls.heads[b.head], hd = headAngle(head, b.headSheet), hf = b.knock > 0 || aa < head.awaMin || aa < hd + 2;
-    this.setHead(r, b, ss, hd, b.headPow, hf || b.headPow < 0.9, tm + Z);
+    const camber = (0.6 + 0.5 * clamp(1 - Math.abs(b.mainSheet - b.ideal.mainSheet) * 3, 0, 1)) * (1 - 0.9 * sl.luffM) * sl.breath;
+    this.setMain(r.mg, sl.side * clamp(Math.abs(sl.boom) * 6, 0.15, 1), reefH * (0.6 + 0.4 * b.mainPow), camber, sl.luffM, tm + X, b.aws);
+    const head = b.cls.heads[b.head], hd = headAngle(head, b.headSheet);
+    const hT = b.knock > 0 || aa < head.awaMin ? 1 : Math.max(clamp((hd + 4 - aa) / 10, 0, 1), 1 - b.headPow);
+    sl.luffH += (hT - sl.luffH) * Math.min(1, dt * 3);
+    this.setHead(r, b, ss, hd, b.headPow, sl.luffH, tm + Z);
     r.hmesh.visible = b.headPow > 0.02;
     r.keelG.rotation.z = b.keel * b.cls.keelMax * D;
     r.foilP.position.x = -1.2 + (1 - b.foilP) * 2.4;
@@ -480,10 +529,9 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     // chariot de grand-écoute et barres franches
     r.car.position.x = clamp(b.trav, -1, 1) * ss * HW(TRAV_T) * 0.6;
     r.tiller.rotation.y = b.rud * 0.8;
+    r.skipper.root.visible = !(isMe && pov);
     this.animSkipper(r, b, dt, tack);
-    r.sailor.visible = b.knock <= 0 && !(isMe && pov);
     this.updateRopes(r, b, ss, tm, isMe);
-    r.head.visible = !(isMe && pov);
     r.lb.visible = !isMe; r.used = true;
     if (isMe && r.hmesh.visible) this.setTells(r, b, ss, tm);
     // embruns
@@ -497,29 +545,89 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     }
   }
 
-  /** Skipper : à la barre côté au vent ; au virement il traverse et mouline sur le winch sous le vent ; pendant une manœuvre, à la colonne. */
+  /** Caméra de test (gros plans). */
+  debugCam: { p: number[]; t: number[] } | null = null;
+  private sv = new T.Vector3(); private sv2 = new T.Vector3(); private sv3 = new T.Vector3(); private sq = new T.Quaternion();
+  /** Point du pont (coordonnées du bateau) → monde. */
+  private toWorld(r: Rec, x: number, y: number, z: number, out: T.Vector3): T.Vector3 { return r.roll.localToWorld(out.set(x, y, z)); }
+
+  /**
+   * Skipper : à la barre côté au vent, une main sur le stick ; au virement il traverse en se baissant sous la bôme,
+   * puis mouline sur le winch sous le vent ; quand il règle le foc il reprend le bout à pleines mains ;
+   * pendant un changement de voile il mouline à la colonne. Il compense la gîte et regarde autour de lui.
+   */
   private animSkipper(r: Rec, b: Boat, dt: number, tack: number): void {
-    const k = r.sk;
+    const k = r.sk, S = r.skipper, tm = this.rt;
+    // réglages en cours ?
+    if (k.lastHead >= 0) {
+      // seuls les réglages francs comptent (l'assistance fait de petites retouches en permanence)
+      const vh = Math.abs(b.headSheet - k.lastHead) / Math.max(dt, 1e-3), vm = Math.abs(b.mainSheet - k.lastMain) / Math.max(dt, 1e-3);
+      if (vh > 0.08) k.trimT = 1.4; else k.trimT = Math.max(0, k.trimT - dt);
+      if (vm > 0.06) k.mainT = 1; else k.mainT = Math.max(0, k.mainT - dt);
+    }
+    k.lastHead = b.headSheet; k.lastMain = b.mainSheet;
     if (!k.tack) k.tack = tack;
-    if (tack !== k.tack) { k.tack = tack; k.mode = 'grind'; k.timer = 3.5; }
+    if (tack !== k.tack) { k.tack = tack; k.mode = 'grind'; k.timer = 3.8; }
     if (b.task) k.mode = 'pedestal';
     else if (k.mode === 'pedestal') k.mode = 'helm';
-    if (k.mode === 'grind') { k.timer -= dt; if (k.timer <= 0) k.mode = 'helm'; }
-    const tx = k.mode === 'helm' ? -tack * 1.55 : k.mode === 'grind' ? tack * 1.4 : 0;
-    const tt = k.mode === 'helm' ? 0.952 : k.mode === 'grind' ? 0.84 : 0.83;
-    const sp = 2.4 * dt, dx = tx - k.x, dz = (tt - k.t) * 18.28, d = Math.hypot(dx, dz);
-    const walking = d > 0.06;
-    if (walking) { const f = Math.min(1, sp / d); k.x += dx * f; k.t += (tt - k.t) * f; }
-    const ph = this.rt * 9;
-    r.sailor.position.set(k.x, deckY(k.t, k.x / HW(k.t)) + (walking ? Math.abs(Math.sin(ph)) * 0.05 : 0), HZ(k.t));
-    // il reste vertical malgré la gîte ; il regarde vers l'avant, ou vers son winch
-    r.sailor.rotation.set(0, walking ? Math.atan2(-dx, -dz) : k.mode === 'grind' ? -tack * Math.PI / 2 : k.mode === 'helm' ? tack * 0.35 : 0, tack * r.heel * 0.75, 'YXZ');
-    if (walking) { r.armL.rotation.x = 0.3 + Math.sin(ph) * 0.5; r.armR.rotation.x = 0.3 - Math.sin(ph) * 0.5; }
+    if (k.mode === 'grind') { k.timer -= dt; if (k.timer <= 0) k.mode = k.trimT > 0 ? 'trim' : 'helm'; }
+    else if (k.mode === 'helm' && k.trimT > 0.9 && b.headPow > 0.5) k.mode = 'trim';
+    else if (k.mode === 'trim' && k.trimT <= 0) k.mode = 'helm';
+    // où il va
+    const tx = k.mode === 'helm' ? -tack * 1.55 : k.mode === 'pedestal' ? 0 : tack * 1.3;
+    const tt = k.mode === 'helm' ? 0.905 : k.mode === 'pedestal' ? 0.835 : 0.84;
+    const dx = tx - k.x, dz = (tt - k.t) * 18.28, d = Math.hypot(dx, dz), walking = d > 0.08;
+    if (walking) { const f = Math.min(1, 2.6 * dt / d); k.x += dx * f; k.t += (tt - k.t) * f; k.walk += dt * 10; }
+    const yawT = walking ? Math.atan2(-dx, -dz) : k.mode === 'helm' ? -tack * 0.35 : k.mode === 'pedestal' ? 0 : -tack * Math.PI / 2;
+    k.yaw += norm(yawT - k.yaw) * Math.min(1, dt * 6);
+    const ducking = walking && Math.abs(k.x) < 0.9; // passe sous la bôme
+    const hd = r.heel / D, hike = k.mode === 'helm' ? clamp((hd - 12) / 20, 0, 1) : 0;
+    S.root.position.set(k.x, deckY(k.t, clamp(k.x / HW(k.t), -1, 1)), HZ(k.t));
+    S.root.rotation.set(-(r.roll.rotation.x) * 0.6, k.yaw, tack * r.heel * 0.75, 'YXZ');
+    // mains
+    const W = (x: number, y: number, z: number, o: T.Vector3) => this.toWorld(r, x, y, z, o);
+    let hL: T.Vector3 | null = null, hR: T.Vector3 | null = null, bend = 0.1, crouch = 0.25, look = 0;
+    for (const h of r.handles) h.visible = false;
+    r.tailHand = null;
+    if (b.knock > 0) { crouch = 0.9; hL = W(k.x - 0.3, deckY(k.t, 0.9) + 0.55, HZ(k.t) - 0.2, this.sv); hR = W(k.x + 0.3, deckY(k.t, 0.9) + 0.55, HZ(k.t) - 0.2, this.sv2); }
+    else if (walking) { crouch = ducking ? 0.75 : 0.2; bend = ducking ? 0.5 : 0.15; }
     else if (k.mode === 'helm') {
-      // une main sur la barre (côté bordé), l'autre sur l'écoute
-      const tillerArm = tack > 0 ? r.armL : r.armR, other = tack > 0 ? r.armR : r.armL;
-      tillerArm.rotation.x = 1.25 + b.rud * 0.6; other.rotation.x = 0.6 + Math.sin(this.rt * 0.7) * 0.1;
-    } else { r.armL.rotation.x = 1.1 + Math.sin(ph * 0.8) * 0.75; r.armR.rotation.x = 1.1 + Math.sin(ph * 0.8 + Math.PI) * 0.75; }
+      // le stick part du bout de la barre vers la main du skipper
+      r.tillerExt.getWorldPosition(this.sv3);
+      const grip = W(k.x + tack * 0.42, S.root.position.y + 0.92 - 0.25 * hike, HZ(k.t) + 0.05, this.sv);
+      const dir = this.sv2.copy(grip).sub(this.sv3), len = dir.length(); dir.normalize();
+      const tillerQ = r.tillerExt.parent!.getWorldQuaternion(this.sq).invert();
+      r.tillerExt.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), dir.clone().applyQuaternion(tillerQ));
+      grip.copy(this.sv3).addScaledVector(dir, Math.min(len, EXT_L - 0.06));
+      const inboard = tack > 0 ? 'R' : 'L';
+      // l'autre main : l'écoute de grand-voile (elle tire quand on borde), sinon sur la filière
+      const pull = k.mainT > 0 ? Math.sin(tm * 9) * 0.18 : 0;
+      const other = W(k.x - tack * 0.35, S.root.position.y + 0.75 + pull * 0.5, HZ(k.t) - 0.25 + pull, this.sv2);
+      if (inboard === 'R') { hR = grip; hL = other; } else { hL = grip; hR = other; }
+      crouch = 0.3 + hike * 0.4; bend = 0.05; look = -tack * 0.25 + Math.sin(tm * 0.31) * 0.45 + Math.sin(tm * 0.13) * 0.2;
+    } else if (k.mode === 'grind') {
+      // manivelle sur le winch sous le vent
+      const side = tack > 0 ? 1 : 0, h = r.handles[side]; h.visible = true;
+      k.crank += dt * 7; h.rotation.y = k.crank;
+      for (const w of r.winches) if (w.i === 0 && w.sx === tack) w.g.rotation.y += dt * 3;
+      h.children[1].getWorldPosition(this.sv); hL = this.sv; hR = this.sv2.copy(this.sv).add(this.sv3.set(0, 0.05, 0));
+      crouch = 0.35; bend = 0.55; look = 0;
+    } else if (k.mode === 'trim') {
+      // il reprend le bout : les mains alternent entre le winch et le corps
+      const wp = WINCHES[0], wx = tack * wp.x, wy = deckY(wp.t, wp.x / HW(wp.t)) + 0.4, wz = HZ(wp.t);
+      const ph = tm * 6, a = (Math.sin(ph) + 1) / 2, c = (Math.sin(ph + Math.PI) + 1) / 2;
+      hL = W(wx + (k.x - wx) * a * 0.7, wy + 0.1 - a * 0.25, wz + 0.1, this.sv);
+      hR = W(wx + (k.x - wx) * c * 0.7, wy + 0.1 - c * 0.25, wz - 0.1, this.sv2);
+      for (const w of r.winches) if (w.i === 0 && w.sx === tack) w.g.rotation.y += dt * 2;
+      r.tailHand = new T.Vector3(wx + (k.x - wx) * 0.6, wy - 0.15, wz);
+      crouch = 0.3; bend = 0.45;
+    } else {
+      // colonne de moulin à café
+      r.pedCrank.rotation.x -= dt * 6;
+      r.pedCrank.children[1].getWorldPosition(this.sv); r.pedCrank.children[3].getWorldPosition(this.sv2);
+      hL = this.sv; hR = this.sv2; crouch = 0.25; bend = 0.6;
+    }
+    S.update({ handL: hL, handR: hR, lean: tack * hike * 0.35, bend, crouch, walk: walking ? k.walk : null, look, t: tm });
   }
 
   private ropeMats: { lee: T.MeshStandardMaterial; wind: T.MeshStandardMaterial; main: T.MeshStandardMaterial } | null = null;
@@ -621,7 +729,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     this.cam.aspect = w / Math.max(1, h); this.cam.updateProjectionMatrix();
   }
 
-  render(g: Game, boats: Boat[], me: Boat, dt: number, rt: number, view: 'pov' | 'chase'): void {
+  render(g: Game, boats: Boat[], me: Boat, dt: number, rt: number, view: 'pov' | 'chase' | 'tv'): void {
     this.rt = rt; this.amp = g.waveAmp;
     if (g.venue.id !== this.venueId) this.setVenue(g);
     if (g.sky !== this.skyId) this.setSky(g.sky);
@@ -638,6 +746,12 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     for (const r of this.boats3.values()) r.yaw.visible = r.used;
     this.decor.update(g, boats, me, dt, rt, this.amp);
     this.updateWeather(g, dt);
+    for (const r of this.boats3.values()) r.navG.visible = this.night;
+    if (this.night) {
+      for (const bm of this.beams) bm.g.rotation.y = tm * 0.9 + bm.ph;
+      for (const o of [...this.marks3, this.pin3]) { const fl = o.userData.flash as T.Sprite | undefined; if (fl) fl.visible = ((tm + o.position.x * 0.01) % 2.5) < 0.35; }
+    } else for (const o of [...this.marks3, this.pin3]) { const fl = o.userData.flash as T.Sprite | undefined; if (fl) fl.visible = false; }
+    this.decor.setNight(this.night, tm);
     // sillage
     const wake = this.wake; let n = 0;
     for (const b of boats) for (const w of b.wake) {
@@ -668,6 +782,8 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       const tack = me.twa >= 0 ? 1 : -1;
       this.eul.set(-0.06 + mr.roll.rotation.x * 0.6 + look.pitch, -me.h + look.yaw, -tack * mr.heel * 0.55, 'YXZ'); cam.quaternion.setFromEuler(this.eul);
       this.setFov(74 + clamp((kn - 8) * 0.7, 0, 16), dt);
+    } else if (view === 'tv' && mr) {
+      this.tvCam(me, mr, dt, kn, tm);
     } else {
       if (this.camYaw == null) this.camYaw = me.h;
       this.camYaw = norm(this.camYaw + norm(me.h - this.camYaw) * Math.min(1, dt * 1.6));
@@ -677,6 +793,12 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       cam.position.lerp(this.tmp.set(tx, Math.max(3, ty), tz), Math.min(1, dt * 3));
       cam.lookAt(X + Math.sin(cy) * 10, 7, Z - Math.cos(cy) * 10);
       this.setFov(58 + clamp((kn - 8) * 0.9, 0, 22), dt);
+    }
+    // caméra de test (gros plans) : position et cible dans le repère du bateau
+    if (this.debugCam && mr) {
+      const dc = this.debugCam;
+      cam.position.copy(mr.roll.localToWorld(this.tmp.set(dc.p[0], dc.p[1], dc.p[2])));
+      cam.lookAt(mr.roll.localToWorld(this.hw.set(dc.t[0], dc.t[1], dc.t[2])));
     }
     // mer + risées
     const wU = this.wU;
@@ -741,6 +863,7 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
       nuageux: { top: '#56789a', hor: '#c3ced7', sun: [-0.45, 0.5, -0.78], sunCol: '#f2f0ea', sunI: 0.55, hemi: 0.85, near: 2000, far: 11000, cloud: '#e6eaee', cloudOp: 1.5, lo: [0.72, 0.78, 0.83], hi: [0.42, 0.52, 0.62], rain: 0 },
       pluie: { top: '#47525c', hor: '#8e9aa4', sun: [-0.45, 0.6, -0.78], sunCol: '#d9dde0', sunI: 0.28, hemi: 0.8, near: 500, far: 5200, cloud: '#7d8892', cloudOp: 1.8, lo: [0.56, 0.61, 0.66], hi: [0.36, 0.41, 0.46], rain: 1 },
       brume: { top: '#a3b5c1', hor: '#dbe2e6', sun: [-0.45, 0.45, -0.78], sunCol: '#f5f3ee', sunI: 0.45, hemi: 0.9, near: 120, far: 2300, cloud: '#ffffff', cloudOp: 0.3, lo: [0.82, 0.86, 0.88], hi: [0.7, 0.76, 0.8], rain: 0 },
+      nuit: { top: '#04081a', hor: '#0b1628', sun: [0.35, 0.5, -0.8], sunCol: '#9fb6e8', sunI: 0.2, hemi: 0.12, near: 400, far: 7000, cloud: '#1b2438', cloudOp: 0.7, lo: [0.06, 0.08, 0.14], hi: [0.02, 0.03, 0.08], rain: 0 },
       couchant: { top: '#283a6e', hor: '#f2a463', sun: [-0.3, 0.07, -0.95], sunCol: '#ffae6b', sunI: 0.95, hemi: 0.5, near: 2200, far: 12500, cloud: '#ffc2a0', cloudOp: 1.2, lo: [0.98, 0.66, 0.45], hi: [0.42, 0.42, 0.62], rain: 0 },
     };
     const p = P[id] ?? P.soleil;
@@ -748,7 +871,13 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     this.sunDir.set(p.sun[0], p.sun[1], p.sun[2]).normalize();
     this.sun.color.set(p.sunCol);
     this.sky = { near: p.near, far: p.far, sun: p.sunI, hemi: p.hemi, rain: p.rain };
-    this.hemi.color.set(id === 'couchant' ? '#ffd2b0' : '#e4f3ff');
+    this.hemi.color.set(id === 'couchant' ? '#ffd2b0' : id === 'nuit' ? '#5a6f9a' : '#e4f3ff');
+    this.night = id === 'nuit';
+    this.foamLum.setRGB(...((this.night ? [0.22, 0.28, 0.36] : id === 'pluie' ? [0.7, 0.74, 0.78] : id === 'couchant' ? [1, 0.88, 0.8] : [0.95, 0.97, 1]) as [number, number, number]));
+    this.glow.set(this.night ? '#cfdcff' : id === 'couchant' ? '#ffb070' : '#ffe1a6');
+    this.amb.intensity = (this.night ? 0.05 : 0.25) * Math.PI;
+    this.stars.visible = this.night;
+    for (const bm of this.beams) bm.g.visible = this.night;
     for (const c of this.clouds) { (c.sp.material as T.SpriteMaterial).color.set(p.cloud); c.sp.material.opacity = Math.min(1, c.op * p.cloudOp); }
     (this.wU.skyLo.value as T.Vector3).set(p.lo[0], p.lo[1], p.lo[2]); (this.wU.skyHi.value as T.Vector3).set(p.hi[0], p.hi[1], p.hi[2]);
     const pm = new T.PMREMGenerator(this.ren);
@@ -817,6 +946,59 @@ c=mix(c,fogC,smoothstep(1500.,11000.,d));gl_FragColor=vec4(c,1.);}`,
     const v = this.projV.set(x, y, z).project(this.cam);
     return { x: (v.x + 1) / 2 * w, y: (1 - v.y) / 2 * h, behind: v.z > 1 };
   }
+
+  /** Plan TV en cours. */
+  private tv = { shot: '', t: 0, subj: -1, p: new T.Vector3(), a: 0 };
+  /** Le dernier plan TV, pour l'afficher (« Caméra hélico »…). */
+  tvLabel = '';
+
+  /**
+   * Caméra TV : plans automatiques comme une retransmission, avec un changement de plan toutes les 5 à 8 s
+   * (hélicoptère, caméra posée sur l'eau, travelling latéral, tête de mât, caméra embarquée).
+   */
+  private tvCam(me: Boat, mr: Rec, dt: number, kn: number, tm: number): void {
+    const cam = this.cam, tv = this.tv;
+    tv.t -= dt;
+    const fx = Math.sin(me.h), fz = -Math.cos(me.h), sx = -fz, sz = fx;
+    if (tv.t <= 0 || tv.subj !== me.id) {
+      const shots = ['heli', 'water', 'side', 'mast', 'stern', 'heli', 'water'].filter(x => x !== tv.shot);
+      tv.shot = shots[Math.floor(Math.random() * shots.length)];
+      tv.t = 5 + Math.random() * 3; tv.subj = me.id; tv.a = Math.random() * Math.PI * 2;
+      const side = Math.random() < 0.5 ? 1 : -1;
+      // caméra posée sur l'eau, devant le bateau : il passe devant elle
+      tv.p.set(me.x + fx * (40 + kn * 2.2) + sx * side * 16, 1.6, me.y + fz * (40 + kn * 2.2) + sz * side * 16);
+      tv.a = side;
+      this.tvLabel = ({ heli: 'Caméra hélico', water: 'Caméra au ras de l\'eau', side: 'Travelling', mast: 'Caméra tête de mât', stern: 'Caméra embarquée' } as Record<string, string>)[tv.shot];
+    }
+    const look = this.tmp2.set(me.x, 6, me.y);
+    switch (tv.shot) {
+      case 'heli': {
+        tv.a += dt * 0.12;
+        cam.position.set(me.x + Math.cos(tv.a) * 95, 38 + Math.sin(tm * 0.3) * 3, me.y + Math.sin(tv.a) * 95);
+        cam.lookAt(look); this.setFov(36, 1); break;
+      }
+      case 'water': {
+        cam.position.copy(tv.p); cam.position.y = 1.2 + this.wh(tv.p.x, tv.p.z) * 0.8;
+        cam.lookAt(look.set(me.x, 7, me.y)); this.setFov(clamp(28 + Math.hypot(me.x - tv.p.x, me.y - tv.p.z) * 0.25, 28, 60), 1); break;
+      }
+      case 'side': {
+        const tx = me.x + sx * tv.a * 30 - fx * 6, tz = me.y + sz * tv.a * 30 - fz * 6;
+        cam.position.lerp(this.tmp.set(tx, 4.5, tz), Math.min(1, dt * 2)); if (cam.position.distanceTo(this.tmp) > 60) cam.position.copy(this.tmp);
+        cam.lookAt(look.set(me.x + fx * 3, 5, me.y + fz * 3)); this.setFov(45, 1); break;
+      }
+      case 'mast': {
+        mr.yaw.updateMatrixWorld(true);
+        cam.position.copy(mr.roll.localToWorld(this.tmp.set(0.6, DECK + 27, MAST_Z + 1.2)));
+        cam.lookAt(mr.roll.localToWorld(look.set(0, 0.5, HZ(0.8)))); this.setFov(62, 1); break;
+      }
+      default: { // embarquée, derrière le skipper
+        mr.yaw.updateMatrixWorld(true);
+        cam.position.copy(mr.roll.localToWorld(this.tmp.set(0.4, deckY(0.99, 0) + 2.6, HZ(1) + 1.4)));
+        cam.lookAt(mr.roll.localToWorld(look.set(0, 5, HZ(0.35)))); this.setFov(68, 1); break;
+      }
+    }
+  }
+  private tmp2 = new T.Vector3();
 
   private setFov(target: number, dt: number): void {
     const f = this.lastFov ? this.lastFov + (target - this.lastFov) * Math.min(1, dt * 2) : target;

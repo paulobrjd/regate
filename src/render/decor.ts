@@ -25,6 +25,8 @@ export class Decor {
   /** Décor propre au plan d'eau (forêts, villages, port, montagnes), reconstruit à chaque changement. */
   private islandG = new T.Group(); private windG = new T.Group(); private mountG: T.Group | null = null;
   private venue: Venue | null = null;
+  /** Nuit : fenêtres allumées, feux d'obstacle rouges qui clignotent. */
+  private windows: T.Points[] = []; private redLights: T.Mesh[] = [];
 
   constructor(private scene: T.Scene, private splash: (x: number, y: number, z: number, n: number) => void) {
     const rng = makeRng(2024);
@@ -43,6 +45,7 @@ export class Decor {
   setVenue(v: Venue): void {
     if (this.venue === v) return;
     this.venue = v;
+    this.windows = [];
     for (const c of [...this.islandG.children]) { this.islandG.remove(c); c.traverse(o => { const m = o as T.Mesh; if (m.geometry) m.geometry.dispose(); }); }
     const rng = makeRng(2024 + v.id.length);
     this.forests(rng); this.villages(rng); this.harbour(rng);
@@ -114,6 +117,14 @@ export class Decor {
     walls.forEach((m, i) => { W.setMatrixAt(i, m); W.setColorAt(i, wc[i]); });
     roofs.forEach((m, i) => { R.setMatrixAt(i, m); R.setColorAt(i, rc[i]); });
     if (walls.length) this.islandG.add(W, R);
+    // fenêtres éclairées la nuit
+    if (walls.length) {
+      const pos: number[] = [], v = new T.Vector3(), q = new T.Quaternion(), sc = new T.Vector3();
+      for (const m of walls) { m.decompose(v, q, sc); const n = 1 + Math.floor(rng() * 3); for (let k = 0; k < n; k++) pos.push(v.x + (rng() - 0.5) * sc.x * 0.8, v.y + (rng() - 0.2) * sc.y * 0.4, v.z + (rng() - 0.5) * sc.z * 0.8); }
+      const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+      const pts = new T.Points(g, new T.PointsMaterial({ color: '#ffcf7a', size: 2.2, sizeAttenuation: true, fog: false, transparent: true, opacity: 0.95 }));
+      pts.visible = false; this.islandG.add(pts); this.windows.push(pts);
+    }
     // clochers
     for (const isl of ISLANDS) if (isl.church) {
       const th = Math.atan2(-isl.y, -isl.x) + 0.05, rho = 0.72, Rr = shoreR(isl, th) * rho;
@@ -159,6 +170,7 @@ export class Decor {
       const rotor = new T.Group(); rotor.position.set(x, 111, z - 6.5); this.windG.add(rotor);
       for (let k = 0; k < 3; k++) { const b = new T.Mesh(blade, white); b.rotation.z = k * TAU / 3; rotor.add(b); }
       rotor.rotation.z = i + j; this.rotors.push(rotor);
+      const red = new T.Mesh(new T.SphereGeometry(1.4, 8, 6), new T.MeshBasicMaterial({ color: '#ff2a2a', fog: false })); red.position.set(x, 115, z); red.visible = false; this.windG.add(red); this.redLights.push(red);
       const base = new T.Mesh(new T.CylinderGeometry(4.5, 4.5, 6, 12), std('#e8c547')); base.position.set(x, 1, z); this.windG.add(base);
     }
   }
@@ -211,6 +223,7 @@ export class Decor {
     const bladeG = new T.BoxGeometry(0.5, 0.08, 11); this.heliRotor.position.y = 2; h.add(this.heliRotor);
     for (let k = 0; k < 4; k++) { const b = new T.Mesh(bladeG, dark); b.rotation.y = k * Math.PI / 4 * 2; this.heliRotor.add(b); }
     this.heliTail.position.set(0.4, 0.8, 9); h.add(this.heliTail);
+    { const red = new T.Mesh(new T.SphereGeometry(0.25, 8, 6), new T.MeshBasicMaterial({ color: '#ff2a2a', fog: false })); red.position.set(0, -1.4, 0); red.visible = false; h.add(red); this.redLights.push(red); }
     const tb = new T.Mesh(new T.BoxGeometry(0.06, 2.2, 0.3), dark); this.heliTail.add(tb);
     this.scene.add(h);
   }
@@ -239,6 +252,13 @@ export class Decor {
       g.visible = false; this.scene.add(g);
       this.dolphins.push({ g, side: i % 2 ? 1 : -1, fwd: -2 + i * 4, ph: i * 0.37, lastUp: false });
     }
+  }
+
+  /** Nuit : allume les fenêtres, fait clignoter les feux rouges. */
+  setNight(night: boolean, t: number): void {
+    for (const w of this.windows) w.visible = night;
+    const on = night && (t % 1.5) < 0.7;
+    for (const r of this.redLights) r.visible = on;
   }
 
   // ---------- animation ----------

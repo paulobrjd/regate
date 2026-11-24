@@ -7,6 +7,7 @@ import { ASSISTS } from './game/assist';
 import { Canvas2D, ZOOMS } from './render/canvas2d';
 import { Scene3D } from './render/scene3d';
 import { snapshot } from './render/snapshot';
+import { tvSubject } from './game/replay';
 import { $, updateHud } from './ui/hud';
 import { unlockAudio, sfx, boom, updSound } from './audio/sound';
 import { app, type View } from './app';
@@ -155,7 +156,7 @@ function renderRank(): void {
 }
 
 // ---------- vues, son, temps ----------
-const VIEWS: View[] = ['pov', 'chase', 'top'], VLBL: Record<View, string> = { pov: 'cockpit', chase: 'poursuite', top: 'carte' };
+const VIEWS: View[] = ['pov', 'chase', 'tv', 'top'], VLBL: Record<View, string> = { pov: 'cockpit', chase: 'poursuite', tv: 'TV', top: 'carte' };
 function setView(v: View): void {
   app.view = v; try { localStorage.setItem('regate-view', v); } catch { /* */ }
   $('viewBtn').firstChild!.textContent = 'Vue : ' + VLBL[v];
@@ -228,6 +229,7 @@ function steer(dir: number, big: boolean): boolean {
 addEventListener('keydown', e => {
   if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') return;
   const key = e.key.toLowerCase();
+  if (R.on) { if (e.code === 'Space') { R.playing = !R.playing; e.preventDefault(); } else if (e.code === 'Escape') stopReplay(); else if (e.code === 'KeyC') nextView(); return; }
   if (e.code === 'Escape') { if ($('game').classList.contains('pseudo-fs')) { toggleFs(); return; } if (playing()) menu(); else if (paused) resume(); return; }
   if (e.code === 'KeyC' && !e.repeat) { nextView(); return; }
   if (key === 'm' && !e.repeat) { unlockAudio(); setSnd(!app.soundOn); return; }
@@ -311,6 +313,64 @@ addEventListener('pointerup', () => { ringDrag = false; });
 
 // ---------- boucle : simulation à pas fixe, rendu interpolé ----------
 let last = performance.now(), hudT = 0, acc = 0;
+// ---------- replay ----------
+const RSPEEDS = [1, 4, 16, 0.5];
+const R = { on: false, t: 0, playing: true, speedI: 1, focus: -1 as number, fins: new Map<number, number | null>() };
+function fmtClock(t: number): string { return fmt(t).replace(/\.\d$/, ''); }
+function startReplay(): void {
+  const g = app.g; if (!g || g.rec.frames.length < 2) return;
+  R.on = true; R.t = Math.max(g.rec.t0, -15); R.playing = true; R.focus = -1;
+  R.fins = new Map(g.boats.map(b => [b.id, b.fin]));
+  $('ovEnd').hidden = true; $('rbar').hidden = false; document.body.classList.add('replaying');
+  const sel = $<HTMLSelectElement>('rFocus');
+  sel.innerHTML = '<option value="-1">Caméra auto</option>' + g.rec.boats.map(b => `<option value="${b.id}"></option>`).join('');
+  [...sel.options].slice(1).forEach((o, i) => { o.textContent = g.rec.boats[i].name + (g.rec.boats[i].id === g.me.id ? ' (toi)' : ''); });
+  setView(R3 ? 'tv' : 'top');
+}
+function stopReplay(): void {
+  R.on = false; $('rbar').hidden = true; document.body.classList.remove('replaying');
+  const g = app.g; if (g) { g.rec.apply(g, g.rec.t1, 0, R.fins); for (const b of g.boats) b.fin = R.fins.get(b.id) ?? b.fin; }
+  if (app.view === 'tv') setView('chase');
+  $('ovEnd').hidden = false;
+}
+$('replayBtn').addEventListener('click', startReplay);
+$('rQuit').addEventListener('click', stopReplay);
+$('rPlay').addEventListener('click', () => { R.playing = !R.playing; });
+$('rSpeed').addEventListener('click', () => { R.speedI = (R.speedI + 1) % RSPEEDS.length; });
+$('rCam').addEventListener('click', nextView);
+$<HTMLSelectElement>('rFocus').addEventListener('change', e => { R.focus = +(e.target as HTMLSelectElement).value; });
+$<HTMLInputElement>('rSeek').addEventListener('input', e => {
+  const g = app.g; if (!g) return;
+  const nt = g.rec.t0 + (+(e.target as HTMLInputElement).value / 1000) * (g.rec.t1 - g.rec.t0);
+  g.rec.apply(g, nt, nt - R.t, R.fins); R.t = nt;
+});
+$('rGpx').addEventListener('click', () => {
+  const g = app.g; if (!g) return;
+  const blob = new Blob([g.rec.gpx(g)], { type: 'application/gpx+xml' }), a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'regate-' + g.venue.id + '-' + g.course.id + '.gpx';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
+function stepReplay(g: Game, dt: number): void {
+  const sp = RSPEEDS[R.speedI] * (g.mode === 'net' ? 1 : g.pace);
+  let nt = R.t;
+  if (R.playing) nt = Math.min(g.rec.t1, R.t + dt * sp);
+  if (nt >= g.rec.t1) R.playing = false;
+  g.rec.apply(g, nt, nt - R.t, R.fins); R.t = nt;
+  $('rPlay').textContent = R.playing ? '❚❚' : '▶';
+  $('rSpeed').textContent = '×' + RSPEEDS[R.speedI];
+  $('rTime').textContent = fmtClock(R.t);
+  const seek = $<HTMLInputElement>('rSeek'); if (document.activeElement !== seek) seek.value = String(Math.round((R.t - g.rec.t0) / Math.max(1, g.rec.t1 - g.rec.t0) * 1000));
+}
+function drawReplay(g: Game, dt: number): void {
+  const { boats } = snapshot(g, 1);
+  const focus = R.focus >= 0 ? boats.find(b => b.id === R.focus) ?? boats[0] : tvSubject(g, boats);
+  const rt = g.simT / (g.mode === 'net' ? 1 : g.pace);
+  c2d.rt = rt;
+  if (app.view !== 'top' && R3) { c2d.clear(); R3.render(g, boats, focus, dt * RSPEEDS[R.speedI], rt, app.view as 'pov' | 'chase' | 'tv'); }
+  else c2d.drawTop(g, boats, focus);
+  c2d.drawReplay(g, focus, app.view === 'tv' && R3 ? R3.tvLabel : '');
+}
+
 function draw(g: Game, dt: number, alpha: number): void {
   const { boats, me } = snapshot(g, alpha);
   const rt = (g.simT - STEP + alpha * STEP) / (g.demo ? 2 : g.pace);
@@ -327,7 +387,8 @@ function draw(g: Game, dt: number, alpha: number): void {
 function loop(now: number): void {
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
   const g = app.g;
-  if (g) {
+  if (g && R.on) { stepReplay(g, dt); drawReplay(g, dt); }
+  else if (g) {
     if (!paused) {
       acc += dt * g.timeScale * (g.demo ? 2 : g.pace);
       const inp = input(), t0 = performance.now();
@@ -344,7 +405,7 @@ function loop(now: number): void {
     netSendT -= dt;
     if (netSendT <= 0) { netSendT = 0.1; net.send({ type: 'state', s: g.snapshotMe(), leg: g.me.leg, d: Math.round(g.remaining(g.me)), ocs: g.me.ocs }); }
   }
-  updSound(app.g, app.g ? app.g.simT : 0);
+  updSound(app.g, app.g ? app.g.simT : 0, dt);
   hudT -= dt; if (hudT <= 0) { updateHud(app.g, renderRank); hudT = 0.1; $('timeBtn').firstChild!.textContent = 'Temps ×' + (app.g?.timeScale ?? 1); }
   requestAnimationFrame(loop);
 }
@@ -352,6 +413,8 @@ function loop(now: number): void {
 // accès pour les tests automatisés (Playwright)
 (window as unknown as { __regate: unknown }).__regate = {
   app, setView, startSolo, K, c2d,
+  /** Caméra de test : position et cible dans le repère du bateau (tests). */
+  closeup(p: number[] | null, t?: number[]) { if (R3) R3.debugCam = p ? { p, t: t! } : null; },
   /** Oriente la caméra (tests). */
   lookAt(yaw: number, pitch = 0) { if (R3) { R3.look.yaw = yaw; R3.look.pitch = pitch; R3.look.idle = -1e9; } },
   /** Confie le bateau du joueur à une IA (tests). */

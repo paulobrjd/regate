@@ -21,6 +21,8 @@ export const MAST_T = 0.43, MAST_Z = HZ(MAST_T), DECK = HT(MAST_T) + 0.13;
 /** Winchs : primaires (écoutes de voile d'avant) et secondaires, de chaque côté. */
 export const WINCHES = [{ x: 1.85, t: 0.84, r: 0.17 }, { x: 1.95, t: 0.93, r: 0.14 }];
 export const TRAV_T = 0.95;
+/** Barre franche et stick (m). */
+export const TILLER_L = 2.0, EXT_L = 1.15;
 
 /** Tambour de winch strié (on le voit tourner). */
 function drumTex(): T.CanvasTexture {
@@ -147,7 +149,7 @@ export function mats(): Mats {
 }
 
 export interface ImocaParts {
-  roll: T.Group; mast: T.Mesh; boomG: T.Group; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[]; car: T.Mesh; tiller: T.Group; winches: { g: T.Group; i: number; sx: number }[];
+  roll: T.Group; mast: T.Mesh; boomG: T.Group; keelG: T.Group; foilP: T.Group; foilS: T.Group; ruds: T.Group[]; car: T.Mesh; tiller: T.Group; tillerExt: T.Group; winches: { g: T.Group; i: number; sx: number }[]; handles: T.Group[]; pedCrank: T.Group;
 }
 
 /** Construit la coque, le pont, l'accastillage, le mât et les appendices dans le groupe roll. */
@@ -220,8 +222,7 @@ export function buildImoca(roll: T.Group, col: string, name: string, num: string
   } });
   const floor = (t: number) => deckY(t, 0);
   { const ped = new T.Mesh(new T.CylinderGeometry(0.09, 0.14, 0.95, 12), M.carbon); ped.position.set(0, floor(0.8) + 0.47, HZ(0.8)); roll.add(ped);
-    const hd = new T.Mesh(new T.CylinderGeometry(0.11, 0.11, 0.12, 12), M.metal); hd.rotation.z = Math.PI / 2; hd.position.set(0, floor(0.8) + 0.95, HZ(0.8)); roll.add(hd);
-    for (const sx of [-1, 1]) { const h = new T.Mesh(new T.BoxGeometry(0.04, 0.3, 0.04), M.metal); h.position.set(sx * 0.12, floor(0.8) + 0.95, HZ(0.8) + 0.12); roll.add(h); } }
+    const hd = new T.Mesh(new T.CylinderGeometry(0.11, 0.11, 0.12, 12), M.metal); hd.rotation.z = Math.PI / 2; hd.position.set(0, floor(0.8) + 0.95, HZ(0.8)); roll.add(hd); }
   // --- intérieur : cloison avec descente, écrans, siège baquet, cale-pieds ---
   {
     const tb = 0.715, zb = HZ(tb), wB = HW(tb) * 0.6, yF = floor(0.74), hB = deckY(tb, 0.7) + 0.6 - yF;
@@ -274,11 +275,22 @@ export function buildImoca(roll: T.Group, col: string, name: string, num: string
   { const t = TRAV_T, track = new T.Mesh(new T.BoxGeometry(HW(t) * 1.5, 0.05, 0.1), M.metal); track.position.set(0, floor(t) + 0.32, HZ(t)); roll.add(track);
     for (const sx of [-1, 1]) { const ft = new T.Mesh(new T.BoxGeometry(0.08, 0.32, 0.12), M.carbon); ft.position.set(sx * HW(t) * 0.75, floor(t) + 0.16, HZ(t)); roll.add(ft); } }
   const car = new T.Mesh(new T.BoxGeometry(0.22, 0.1, 0.16), M.dark); car.position.set(0, floor(TRAV_T) + 0.38, HZ(TRAV_T)); roll.add(car);
-  // --- barres franches jumelles reliées par une traverse ---
-  const tiller = new T.Group(); tiller.position.set(0, HT(0.97) + 0.3, HZ(0.965)); roll.add(tiller);
-  { const tm = new T.MeshStandardMaterial({ color: '#b5895a', roughness: 0.5 });
-    for (const sx of [-1, 1]) { const g = new T.CylinderGeometry(0.03, 0.04, 1.5, 8); g.rotateX(Math.PI / 2); const m = new T.Mesh(g, M.carbon); m.position.set(sx * HW(0.97) * 0.72, 0, -0.75); tiller.add(m); }
-    const cb = new T.CylinderGeometry(0.025, 0.025, HW(0.97) * 1.44, 8); cb.rotateZ(Math.PI / 2); const cross = new T.Mesh(cb, tm); cross.position.set(0, 0, -1.45); tiller.add(cross); }
+  // --- barre franche : une vraie barre en bois verni avec son stick, reliée aux deux safrans ---
+  // barre d'accouplement des safrans, au tableau arrière
+  { const tb = new T.CylinderGeometry(0.035, 0.035, HW(0.97) * 1.44, 10); tb.rotateZ(Math.PI / 2);
+    const tie = new T.Mesh(tb, M.metal); tie.position.set(0, HT(0.985) + 0.12, HZ(0.985)); roll.add(tie);
+    for (const sx of [-1, 1]) { const st = new T.Mesh(new T.CylinderGeometry(0.06, 0.06, 0.3, 10), M.carbon); st.position.set(sx * HW(0.97) * 0.72, HT(0.985) + 0.05, HZ(0.985)); roll.add(st); } }
+  const tiller = new T.Group(); tiller.position.set(0, HT(0.98) + 0.32, HZ(0.98)); roll.add(tiller);
+  const wood = new T.MeshStandardMaterial({ color: '#a8743f', roughness: 0.35, metalness: 0.05 });
+  { const g = new T.CylinderGeometry(0.03, 0.045, TILLER_L, 12); g.rotateX(Math.PI / 2); g.translate(0, 0, -TILLER_L / 2);
+    const bar = new T.Mesh(g, wood); bar.rotation.x = 0.1; bar.castShadow = true; tiller.add(bar);
+    const head = new T.Mesh(new T.BoxGeometry(0.16, 0.14, 0.3), M.metal); tiller.add(head);
+    const cap = new T.Mesh(new T.SphereGeometry(0.04, 10, 8), M.dark); cap.position.set(0, TILLER_L * Math.sin(0.1), -TILLER_L * Math.cos(0.1)); tiller.add(cap); }
+  // stick (rallonge) articulé au bout de la barre : orienté à chaque image vers la main du skipper
+  const tillerExt = new T.Group(); tillerExt.position.set(0, TILLER_L * Math.sin(0.1), -TILLER_L * Math.cos(0.1)); tiller.add(tillerExt);
+  { const g = new T.CylinderGeometry(0.016, 0.016, EXT_L, 8); g.translate(0, EXT_L / 2, 0);
+    tillerExt.add(new T.Mesh(g, M.carbon));
+    const grip = new T.Mesh(new T.CylinderGeometry(0.026, 0.026, 0.16, 10), M.dark); grip.position.y = EXT_L - 0.06; tillerExt.add(grip); }
 
   // --- bout-dehors ---
   { const bs = new T.Mesh(new T.CylinderGeometry(0.06, 0.09, 2.6, 10), M.carbon); bs.rotation.x = Math.PI / 2 - 0.05; bs.position.set(0, HT(0) + 0.05, HZ(0) - 1.1); roll.add(bs); }
@@ -304,7 +316,7 @@ export function buildImoca(roll: T.Group, col: string, name: string, num: string
       seg(top, bk); seg(hi, bk); // bastaques
       // filières et chandeliers
       let prev: number[] | null = null;
-      for (let t = 0.07; t <= 0.96; t += 0.0625) {
+      for (let t = 0.1; t <= 0.905; t += 0.0805) {
         const x = sx * HW(t) * 0.97, y0 = HT(t) + 0.05, p0 = [x, y0, HZ(t)], p1 = [x, y0 + 0.62, HZ(t)];
         seg(p0, p1); if (prev) seg(prev, p1); prev = p1;
       }
@@ -335,7 +347,35 @@ export function buildImoca(roll: T.Group, col: string, name: string, num: string
     const g = new T.Group(); g.position.set(sx * HW(0.97) * 0.72, HT(0.97) - 0.3, HZ(0.965)); g.rotation.z = -sx * 0.12;
     const bl = blade(0.5, 0.11, 2.8, M.carbon); bl.position.y = 0.4; g.add(bl); roll.add(g); return g;
   });
-  return { roll, mast, boomG, keelG, foilP, foilS, ruds, car, tiller, winches };
+  // --- balcons avant et arrière en inox (comme sur la référence), rails et chariots de foc, panneau, poulies de pied de mât ---
+  const rail = (pts: number[][], r = 0.022) => { const m = new T.Mesh(new T.TubeGeometry(new T.CatmullRomCurve3(pts.map(p => new T.Vector3(p[0], p[1], p[2]))), pts.length * 8, r, 6), M.metal); m.castShadow = true; roll.add(m); };
+  const edge = (t: number, sx: number, h: number, k = 0.96) => [sx * HW(t) * k, deckY(t, k) + h, HZ(t)];
+  rail([edge(0.1, -1, 0.66), edge(0.04, -1, 0.66), [-HW(0) * 0.55, deckY(0, 0.5) + 0.7, HZ(0) + 0.05], [HW(0) * 0.55, deckY(0, 0.5) + 0.7, HZ(0) + 0.05], edge(0.04, 1, 0.66), edge(0.1, 1, 0.66)]);
+  for (const sx of [-1, 1]) for (const t of [0.1, 0.04]) rail([edge(t, sx, 0), edge(t, sx, 0.66)], 0.018);
+  for (const sx of [-1, 1]) {
+    rail([edge(0.9, sx, 0.66), edge(0.97, sx, 0.66), [sx * HW(0.995) * 0.7, deckY(0.995, 0.7) + 0.66, HZ(0.995)], [sx * HW(0.995) * 0.45, deckY(0.995, 0.45) + 0.62, HZ(0.995)]]);
+    for (const [t, k] of [[0.9, 0.96], [0.97, 0.96], [0.995, 0.7]]) rail([edge(t, sx, 0, k), edge(t, sx, 0.64, k)], 0.018);
+    // rail et chariot de foc
+    const tr = new T.Mesh(new T.BoxGeometry(0.06, 0.03, 2.2), M.metal); tr.position.set(sx * HW(0.5) * 0.8, deckY(0.5, 0.8) + 0.02, HZ(0.5)); roll.add(tr);
+    const cr = new T.Mesh(new T.BoxGeometry(0.1, 0.08, 0.18), M.dark); cr.position.set(sx * HW(0.5) * 0.8, deckY(0.5, 0.8) + 0.07, HZ(0.5)); roll.add(cr);
+    const blk = new T.Mesh(new T.TorusGeometry(0.05, 0.015, 6, 12), M.metal); blk.position.set(sx * HW(0.5) * 0.8, deckY(0.5, 0.8) + 0.14, HZ(0.5)); roll.add(blk);
+  }
+  { const hatch = new T.Mesh(new T.BoxGeometry(0.7, 0.06, 0.7), M.glass); hatch.position.set(0, deckY(0.2, 0) + 0.03, HZ(0.2)); roll.add(hatch);
+    for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2, b = new T.Mesh(new T.CylinderGeometry(0.045, 0.045, 0.05, 10), M.metal); b.position.set(Math.cos(a) * 0.45, DECK + 0.05, MAST_Z + Math.sin(a) * 0.35); roll.add(b); } }
+  // manivelles de winch (une par côté, montrées quand le skipper mouline) et manivelles de colonne
+  const handles = [-1, 1].map(sx => {
+    const wp = WINCHES[0], g = new T.Group(); g.position.set(sx * wp.x, deckY(wp.t, wp.x / HW(wp.t)) + 0.43, HZ(wp.t));
+    const arm = new T.Mesh(new T.BoxGeometry(0.25, 0.025, 0.035), M.metal); arm.position.x = 0.125; g.add(arm);
+    const grip = new T.Mesh(new T.CylinderGeometry(0.022, 0.022, 0.12, 8), M.dark); grip.position.set(0.25, 0.07, 0); g.add(grip);
+    g.visible = false; roll.add(g); return g;
+  });
+  const pedCrank = new T.Group(); pedCrank.position.set(0, deckY(0.8, 0) + 0.95, HZ(0.8)); roll.add(pedCrank);
+  for (const sx of [-1, 1]) {
+    const arm = new T.Mesh(new T.BoxGeometry(0.03, 0.22, 0.03), M.metal); arm.position.set(sx * 0.1, sx * 0.1, 0); pedCrank.add(arm);
+    const grip = new T.Mesh(new T.CylinderGeometry(0.02, 0.02, 0.12, 8), M.dark); grip.rotation.z = Math.PI / 2; grip.position.set(sx * 0.16, sx * 0.2, 0); pedCrank.add(grip);
+  }
+
+  return { roll, mast, boomG, keelG, foilP, foilS, ruds, car, tiller, tillerExt, winches, handles, pedCrank };
 }
 
 /** Texture de grand-voile : membrane 3Di anthracite, lattes, bandes de ris, numéro. */

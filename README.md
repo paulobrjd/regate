@@ -33,7 +33,12 @@ En développement (`npm run dev`), lance aussi `npm run serveur` dans un autre t
 - **Lac des Cimes** : lac de montagne, eau plate, vent qui tourne sans arrêt.
 
 Météo au choix, dont **Variable** (le vent forcit et mollit, des grains passent avec rafales et pluie), et ciel au choix :
-soleil, nuageux, pluie, brume, coucher de soleil.
+soleil, nuageux, pluie, brume, coucher de soleil, **nuit** (feux de navigation, phares, étoiles).
+
+## Replays
+
+À l'arrivée, **Revoir la course** : barre de temps, vitesses ×0,5 à ×16, choix du bateau suivi ou caméra automatique,
+vues TV / cockpit / poursuite / carte, et export de la trace de tous les bateaux en **GPX** (Google Earth, OpenCPN…).
 
 ## Parcours de la Baie des Îles
 

@@ -210,6 +210,30 @@ export class Canvas2D {
     }
   }
 
+  /** Surimpression du replay : bandeau REPLAY, chrono, bateau suivi, classement à cet instant. */
+  drawReplay(g: Game, focus: Boat, camLabel: string): void {
+    const ctx = this.ctx, w = this.VW;
+    ctx.setTransform(this.DPR, 0, 0, this.DPR, 0, 0);
+    this.panel(14, 14, 230, 58, 12, 0.7);
+    ctx.fillStyle = '#e8384f'; ctx.beginPath(); ctx.arc(30, 32, 6, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = '800 18px "Barlow Condensed",sans-serif';
+    ctx.fillText('REPLAY · ' + fmt(g.t), 44, 32);
+    ctx.font = '600 12px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.fillText((camLabel ? camLabel + ' · ' : '') + focus.name + ' · ' + (Math.max(0, focus.v) / 0.514444).toFixed(1).replace('.', ',') + ' nds', 30, 56);
+    const st = g.standings();
+    if (st.length > 1) {
+      const rows = st.slice(0, 8), bw = 170, bx = w - bw - 12;
+      this.panel(bx, 12, bw, 14 + rows.length * 20, 10, 0.55);
+      ctx.font = '600 13px Barlow,sans-serif';
+      rows.forEach((e, i) => {
+        const y = 29 + i * 20; ctx.textAlign = 'left'; ctx.fillStyle = e.name === focus.name ? '#fff' : 'rgba(255,255,255,.8)';
+        ctx.fillText((i + 1) + '.', bx + 10, y); ctx.fillStyle = e.col; ctx.beginPath(); ctx.arc(bx + 34, y, 5, 0, TAU); ctx.fill();
+        ctx.fillStyle = e.name === focus.name ? '#ffd23f' : 'rgba(255,255,255,.85)'; ctx.fillText(e.name.slice(0, 11), bx + 46, y);
+        if (e.fin != null) { ctx.textAlign = 'right'; ctx.fillText('✓', bx + bw - 10, y); }
+      });
+    }
+  }
+
   /** Traits de vitesse sur les bords de l'écran, au-delà de ~14 nœuds. */
   private speedLines(me: Boat, w: number, h: number): void {
     const kn = me.v / 0.514444, a = clamp((kn - 9) / 16, 0, 1) * 0.42;

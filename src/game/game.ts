@@ -16,6 +16,7 @@ import { norm } from '../util/math';
 import { applyAssist, newMem, ASSISTS, type Assist, type AssistMem } from './assist';
 import { crossesRay, segCross, type Course } from './course';
 import { activateVenue, type Venue } from './venue';
+import { Recorder } from './replay';
 
 /** Durée du compte à rebours avant le départ (s). */
 export const PRE = 60;
@@ -56,7 +57,7 @@ export interface GameOpts {
 }
 
 /** État d'un bateau échangé en ligne (tableau compact). */
-const SNAP = ['x', 'y', 'h', 'v', 'heel', 'mainSheet', 'trav', 'headSheet', 'head', 'reefs', 'keel', 'foilP', 'foilS', 'awa', 'tws', 'rud', 'headPow', 'mainPow', 'knock', 'leg', 'ocs', 'twa', 'aws', 'foilLift'] as const;
+export const SNAP = ['x', 'y', 'h', 'v', 'heel', 'mainSheet', 'trav', 'headSheet', 'head', 'reefs', 'keel', 'foilP', 'foilS', 'awa', 'tws', 'rud', 'headPow', 'mainPow', 'knock', 'leg', 'ocs', 'twa', 'aws', 'foilLift'] as const;
 const ANG = new Set(['h', 'awa', 'twa']);
 interface Remote { b: Boat; buf: { t: number; s: number[] }[]; seen: number }
 
@@ -107,6 +108,8 @@ export class Game {
   private remoteClock?: () => number;
   /** Bateaux des autres joueurs (en ligne), par identifiant. */
   readonly remotes = new Map<string, Remote>();
+  /** Enregistrement de la course pour le replay. */
+  readonly rec = new Recorder();
   private obstacles: Obstacle[];
 
   constructor(o: GameOpts) {
@@ -265,6 +268,7 @@ export class Game {
       this.progress(b);
     }
     this.collide();
+    if (!this.demo) this.rec.capture(this);
     if (this.isMe(this.me)) this.coach(this.me, dt);
     this.autoSlow();
     if (this.demo && (this.boats.every(b => b.fin != null) || t > 1500)) this.over = true;
@@ -393,10 +397,7 @@ export class Game {
 
   // ---------- en ligne ----------
   /** État compact de mon bateau, à envoyer au serveur. */
-  snapshotMe(): number[] {
-    const b = this.me as unknown as Record<string, number | boolean>;
-    return SNAP.map(k => { const v = b[k]; return typeof v === 'boolean' ? (v ? 1 : 0) : k === 'knock' ? ((v as number) > 0 ? 1 : 0) : Math.round((v as number) * 1000) / 1000; });
-  }
+  snapshotMe(): number[] { return snapOf(this.me); }
   addRemote(id: string, name: string, col: string): void {
     if (this.remotes.has(id)) return;
     const b = mkBoat(this.cls, { id: 100 + this.remotes.size, name, col, x: 0, y: 400, v: 0 });
@@ -426,25 +427,7 @@ export class Game {
     let A = r.buf[0], B = r.buf[r.buf.length - 1];
     for (let i = 0; i + 1 < r.buf.length; i++) if (r.buf[i].t <= rnow && r.buf[i + 1].t >= rnow) { A = r.buf[i]; B = r.buf[i + 1]; break; }
     const f = B.t > A.t ? clamp((rnow - A.t) / (B.t - A.t), 0, 1.5) : 1;
-    b.ix = b.x; b.iy = b.y; b.ih = b.h; b.px = b.x; b.py = b.y;
-    const o = b as unknown as Record<string, number | boolean>;
-    SNAP.forEach((k, i) => {
-      const a = A.s[i] ?? 0, c = B.s[i] ?? a;
-      let v = ANG.has(k) ? a + norm(c - a) * f : a + (c - a) * f;
-      if (k === 'head' || k === 'reefs' || k === 'leg') v = Math.round(f < 0.5 ? a : c);
-      if (k === 'ocs') o[k] = (f < 0.5 ? a : c) > 0.5;
-      else if (k === 'knock') o[k] = (f < 0.5 ? a : c) > 0.5 ? 1 : 0;
-      else o[k] = v;
-    });
-    b.tack = b.twa >= 0 ? 1 : -1;
-    b.ideal = { mainSheet: b.mainSheet, trav: b.trav, headSheet: b.headSheet };
-    b.wt += dt;
-    for (const w of b.wake) w.t += dt;
-    while (b.wake.length && b.wake[0].t > 6) b.wake.shift();
-    if (b.wt > 0.1 && b.v > 0.8) {
-      b.wt = 0; const fx = Math.sin(b.h), fy = -Math.cos(b.h), sx = -fy * 2.2, sy = fx * 2.2;
-      b.wake.push({ x: b.x - fx * 9 + sx, y: b.y - fy * 9 + sy, t: 0 }, { x: b.x - fx * 9 - sx, y: b.y - fy * 9 - sy, t: 0 });
-    }
+    applySnap(b, A.s, B.s, f, dt);
   }
 
   /** Distance restante (m) jusqu'à l'arrivée en suivant le parcours. */
@@ -474,3 +457,32 @@ export class Game {
 
 /** Configuration conseillée pour le vent local du bateau. */
 const bestFor = (g: Game, b: Boat) => bestConfig(g.cal, Math.max(b.twsAvg, b.tws - 3), Math.abs(b.twa) / D);
+
+/** Pose un bateau entre deux états compacts (f ∈ [0,1]) et fait avancer son sillage. */
+export function applySnap(b: Boat, A: ArrayLike<number>, B: ArrayLike<number>, f: number, dt: number): void {
+  b.ix = b.x; b.iy = b.y; b.ih = b.h; b.px = b.x; b.py = b.y;
+  const o = b as unknown as Record<string, number | boolean>;
+  SNAP.forEach((k, i) => {
+    const a = A[i] ?? 0, c = B[i] ?? a;
+    let v = ANG.has(k) ? a + norm(c - a) * f : a + (c - a) * f;
+    if (k === 'head' || k === 'reefs' || k === 'leg') v = Math.round(f < 0.5 ? a : c);
+    if (k === 'ocs') o[k] = (f < 0.5 ? a : c) > 0.5;
+    else if (k === 'knock') o[k] = (f < 0.5 ? a : c) > 0.5 ? 1 : 0;
+    else o[k] = v;
+  });
+  b.tack = b.twa >= 0 ? 1 : -1;
+  b.ideal = { mainSheet: b.mainSheet, trav: b.trav, headSheet: b.headSheet };
+  b.wt += dt;
+  for (const w of b.wake) w.t += dt;
+  while (b.wake.length && b.wake[0].t > 6) b.wake.shift();
+  if (b.wt > 0.1 && b.v > 0.8) {
+    b.wt = 0; const fx = Math.sin(b.h), fy = -Math.cos(b.h), sx = -fy * 2.2, sy = fx * 2.2;
+    b.wake.push({ x: b.x - fx * 9 + sx, y: b.y - fy * 9 + sy, t: 0 }, { x: b.x - fx * 9 - sx, y: b.y - fy * 9 - sy, t: 0 });
+  }
+}
+
+/** État compact d'un bateau. */
+export function snapOf(boat: Boat): number[] {
+  const b = boat as unknown as Record<string, number | boolean>;
+  return SNAP.map(k => { const v = b[k]; return typeof v === 'boolean' ? (v ? 1 : 0) : k === 'knock' ? ((v as number) > 0 ? 1 : 0) : Math.round((v as number) * 1000) / 1000; });
+}
