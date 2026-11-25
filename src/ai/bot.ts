@@ -7,6 +7,7 @@ import { islandAhead } from '../physics/world';
 import type { Boat } from '../physics/boat';
 import type { Course } from '../game/course';
 import type { AssistMem } from '../game/assist';
+import { avoid, RULES, type Threat } from './rules';
 
 export interface Level { perf: [number, number]; corr: [number, number]; early: [number, number]; err: number }
 export const LEVELS: readonly Level[] = [
@@ -22,12 +23,14 @@ export interface AI {
   exit: { x: number; y: number } | null;
   /** Amure visée (+1 bâbord, -1 tribord) : on la garde pendant que le bateau vire. */
   k: number;
+  /** Évitement en cours (cap tenu jusqu'à `avoidUntil`), menace à héler, prochain calcul. */
+  avoidH: number; avoidUntil: number; avoidT: number; hail: Threat | null; brakeUntil: number;
 }
 
 export function mkAI(L: Level, home: number, rng: Rng, mem: AssistMem): AI {
   return {
     corr: rrange(rng, ...L.corr), early: rrange(rng, ...L.early), home,
-    dir: rng() < 0.5 ? 1 : -1, err: rrange(rng, -L.err, L.err), wpi: 0, legSeen: -1, lastTack: -1e9, back: false, mem, exit: null, k: 0,
+    dir: rng() < 0.5 ? 1 : -1, err: rrange(rng, -L.err, L.err), wpi: 0, legSeen: -1, lastTack: -1e9, back: false, mem, exit: null, k: 0, avoidH: 0, avoidUntil: -1e9, avoidT: -1e9, hail: null, brakeUntil: -1e9,
   };
 }
 
@@ -39,12 +42,19 @@ function angles(b: Boat): { up: number; down: number; vmgUp: number } {
   return a;
 }
 
+/** Chaque bateau contourne les bouées sur son propre « couloir » (plus ou moins au large) : ils ne visent pas tous le même point. */
+function lane(m: { x: number; y: number; island?: number }, w: { x: number; y: number }, id: number): { x: number; y: number } {
+  if (m.island != null) return w;
+  const dx = w.x - m.x, dy = w.y - m.y, d = Math.hypot(dx, dy) || 1, k = (d + (id % 4) * 22) / d;
+  return { x: m.x + dx * k, y: m.y + dy * k };
+}
+
 /** Point visé : sous-point de passage de la prochaine bouée, ou la ligne d'arrivée. */
 export function aiTarget(b: Boat, c: Course): { x: number; y: number } {
   const A = b.ai!;
   if (b.leg !== A.legSeen) {
     const prev = b.leg - 2 >= 0 && b.leg - 2 < c.marks.length ? c.marks[b.leg - 2] : null;
-    A.exit = prev && A.legSeen === b.leg - 1 ? prev.wp[2] : null;
+    A.exit = prev && A.legSeen === b.leg - 1 ? lane(prev, prev.wp[2], b.id) : null;
     A.legSeen = b.leg; A.wpi = 0;
   }
   if (A.exit) {
@@ -54,8 +64,8 @@ export function aiTarget(b: Boat, c: Course): { x: number; y: number } {
   if (b.leg >= 1 && b.leg <= c.marks.length) {
     const m = c.marks[b.leg - 1];
     // approche, puis point extérieur jusqu'à ce que le passage soit validé (le point de sortie vient après)
-    let w = m.wp[A.wpi];
-    while (A.wpi < 1 && Math.hypot(w.x - b.x, w.y - b.y) < (m.island != null ? 300 : 45)) w = m.wp[++A.wpi];
+    let w = lane(m, m.wp[A.wpi], b.id);
+    while (A.wpi < 1 && Math.hypot(w.x - b.x, w.y - b.y) < (m.island != null ? 300 : 45)) w = lane(m, m.wp[++A.wpi], b.id);
     return w;
   }
   // arrivée : si on est déjà passé sous la ligne sans la couper (hors bouées), on remonte d'abord
@@ -64,7 +74,7 @@ export function aiTarget(b: Boat, c: Course): { x: number; y: number } {
 }
 
 /** Choisit le cap (consigne du pilote, mode cap). t : temps depuis le départ (s). */
-export function aiSteer(b: Boat, c: Course, t: number, wd: number): void {
+export function aiSteer(b: Boat, c: Course, t: number, wd: number, others: Boat[] = []): void {
   const A = b.ai!, ang = angles(b), up = ang.up * D, down = ang.down * D;
   let h: number;
   if (b.fin != null) { h = b.h; b.pilot = { on: true, mode: 'cap', set: wd + Math.PI / 2 }; return; }
@@ -118,6 +128,17 @@ export function aiSteer(b: Boat, c: Course, t: number, wd: number): void {
         if (d < 900) { const l = islandAhead(b.x, b.y, h - 0.5, 900, 220), r = islandAhead(b.x, b.y, h + 0.5, 900, 220); h += r >= l ? 0.5 : -0.5; }
       }
     }
+  }
+  // règles de course et anticipation des collisions (recalculées 10 fois par seconde)
+  if (others.length && RULES.on) {
+    if (t - A.avoidT >= 0.1 || t < A.avoidT) {
+      A.avoidT = t;
+      const r = avoid(b, others, h, wd, c, up);
+      A.hail = r.hail;
+      if (Math.abs(norm(r.h - h)) > 0.02) { A.avoidH = r.h; A.avoidUntil = t + 3; }
+      if (r.brake) A.brakeUntil = t + 2;
+    }
+    if (t < A.avoidUntil) h = A.avoidH;
   }
   // dernier recours : si le cap mène sur une île, on prend le cap navigable dégagé le plus proche
   if (t >= 0 && islandAhead(b.x, b.y, h, 600, 150) < 600) {

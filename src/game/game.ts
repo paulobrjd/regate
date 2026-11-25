@@ -11,6 +11,7 @@ import {
   config, NO_INPUT, type Boat, type BoatEvent, type StepEnv, type Obstacle, type BoatInput,
 } from '../physics/boat';
 import { LEVELS, mkAI, aiSteer, type AI } from '../ai/bot';
+import { giveWay, REASON_TXT, type Reason } from '../ai/rules';
 import { vmgAngles } from '../physics/polar';
 import { norm } from '../util/math';
 import { applyAssist, newMem, ASSISTS, type Assist, type AssistMem } from './assist';
@@ -280,8 +281,10 @@ export class Game {
       if (b.remote) { this.updateRemote(b, rnow, dt); continue; }
       let inp = NO_INPUT;
       if (b.ai) {
-        aiSteer(b, this.course, t, this.wd);
-        applyAssist(b, { sheets: true, systems: true, sails: true }, this.cal, b.ai.mem, this.simT, dt, b.ai.err);
+        aiSteer(b, this.course, t, this.wd, this.boats);
+        if (b.ai.hail && b.ai.hail.o === this.me && !this.demo) this.hailMe(b, b.ai.hail.why);
+        // un bot qui doit freiner pour éviter un contact choque franchement ses écoutes
+        applyAssist(b, { sheets: true, systems: true, sails: true }, this.cal, b.ai.mem, this.simT, dt, t < b.ai.brakeUntil ? 0.45 : b.ai.err);
       } else if (b.fin == null) {
         if (b === this.me && !this.demo) this.updateAdvice(b, dt);
         if (this.routeAuto && this.advice != null) {
@@ -316,7 +319,7 @@ export class Game {
     // si le joueur a viré de lui-même, le fantôme accepte son choix
     if (b.tack !== this.ghostTack) { this.ghostTack = b.tack; if (!this.routeAuto) { A.k = b.tack; A.lastTack = this.t; } }
     const ghost = { ...b, pilot: { ...b.pilot }, ai: A };
-    aiSteer(ghost, this.course, this.t, this.wd);
+    aiSteer(ghost, this.course, this.t, this.wd, this.boats.filter(x => x !== b)); // la route auto respecte aussi les priorités
     const h = ghost.pilot.set;
     this.advice = h;
     const twaA = norm(h - this.wd), d = norm(h - b.h) / D;
@@ -395,6 +398,20 @@ export class Game {
     }
   }
 
+  /** Nombre de contacts entre bateaux (tests). */
+  contacts = 0;
+  contactLog: { t: number; x: number; y: number; a: number; b: number }[] = [];
+  private pairT = new Map<number, number>();
+  private lastContact = -1e9;
+  private hailT = new Map<number, number>();
+  /** Un bot prioritaire en route de collision avec moi me hèle. */
+  private hailMe(b: Boat, why: Reason): void {
+    if (this.simT < (this.hailT.get(b.id) ?? -1e9)) return;
+    this.hailT.set(b.id, this.simT + 12);
+    const cry: Record<Reason, string> = { tribord: '« Tribord ! »', sousLeVent: '« Lofe ! Je suis sous le vent ! »', devant: '« Attention derrière ! »', bouee: '« De la place à la bouée ! »' };
+    this.say(b.name + ' : ' + cry[why] + ' (' + REASON_TXT[why] + ')');
+  }
+
   /** Repasse en temps réel près des moments importants. */
   private autoSlow(): void {
     if (this.timeScale === 1) return;
@@ -458,7 +475,15 @@ export class Game {
         const rv = (Math.sin(b.h) * b.v - Math.sin(a.h) * a.v) * dx + (-Math.cos(b.h) * b.v + Math.cos(a.h) * a.v) * dy;
         if (rv < -0.5 * d) {
           a.v *= 0.8; b.v *= 0.8;
-          if ((a === this.me || b === this.me) && this.msgT < 1) this.say('Collision !');
+          // un contact = un épisode par paire (pas un par image)
+          const key = Math.min(a.id, b.id) * 1000 + Math.max(a.id, b.id);
+          if (this.simT > (this.pairT.get(key) ?? -1e9)) { this.contacts++; this.contactLog.push({ t: this.t, x: a.x, y: a.y, a: a.id, b: b.id }); }
+          this.pairT.set(key, this.simT + 3);
+          if ((a === this.me || b === this.me) && !this.demo && this.simT > this.lastContact + 4) {
+            this.lastContact = this.simT;
+            const gw = giveWay(a, b, this.wd, this.course), other = a === this.me ? b : a;
+            this.say(gw.who === this.me ? 'Contact ! C\'était à toi de t\'écarter : ' + REASON_TXT[gw.why] : 'Contact ! ' + other.name + ' devait s\'écarter : ' + REASON_TXT[gw.why]);
+          }
         }
       }
     }
