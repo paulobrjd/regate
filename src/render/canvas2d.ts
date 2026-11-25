@@ -333,6 +333,9 @@ export class Canvas2D {
     ctx.fillStyle = 'rgba(255,255,255,.16)'; this.rrect(x + 12, y + 64, 126, 8, 4); ctx.fill();
     ctx.fillStyle = me.eff > 0.95 ? '#3ddc97' : me.eff > 0.8 ? '#f4a261' : '#e8384f'; this.rrect(x + 12, y + 64, 126 * p, 8, 4); ctx.fill();
     ctx.font = '600 11px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillText('polaire ' + Math.round(me.eff * 100) + ' %', x + 12, y + 86);
+    if (me.boost > 0.005) {
+      ctx.fillStyle = 'rgba(255,214,63,.9)'; ctx.font = '800 12px "Barlow Condensed",sans-serif'; ctx.textAlign = 'right'; ctx.fillText('⚡ +' + Math.round(me.boost * 100) + ' %', x + 138, y + 18); ctx.textAlign = 'left';
+    }
     if (fly) {
       const pul = 0.75 + 0.25 * Math.sin(this.rt * 8);
       ctx.fillStyle = `rgba(255,106,31,${pul})`; this.rrect(x + 92, y + 74, 50, 16, 8); ctx.fill();
@@ -407,6 +410,23 @@ export class Canvas2D {
     if (g.timeScale > 1) {
       ctx.font = '800 14px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center';
       ctx.fillStyle = '#ffd23f'; ctx.fillText('ACCÉLÉRÉ ×' + g.timeScale + ' (T)', 48, 136);
+    }
+    // note de la dernière manœuvre (et combo)
+    if (g.lastGrade && g.simT - g.lastGrade.at < 4.5 && !g.demo) {
+      const L = g.lastGrade, age = g.simT - L.at, a = Math.min(1, (4.5 - age) * 2), pop = 1 + Math.max(0, 0.25 - age) * 1.6;
+      const col: Record<string, string> = { 'A+': '#3ddc97', A: '#7be0a6', B: '#ffd23f', C: '#f4a261', D: '#e8384f' };
+      const kind = { tack: 'Virement', gybe: 'Empannage', mark: 'Bouée' }[L.kind];
+      const cx = w / 2, cy = toS ? 120 : 118;
+      ctx.save(); ctx.globalAlpha = a;
+      this.panel(cx - 150, cy - 32, 300, 64, 16, 0.78);
+      ctx.translate(cx - 108, cy); ctx.scale(pop, pop);
+      ctx.fillStyle = col[L.grade]; ctx.font = '800 44px "Barlow Condensed",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(L.grade, 0, 2);
+      ctx.setTransform(this.DPR, 0, 0, this.DPR, 0, 0); ctx.globalAlpha = a;
+      ctx.textAlign = 'left'; ctx.fillStyle = '#fff'; ctx.font = '800 18px "Barlow Condensed",sans-serif';
+      ctx.fillText(kind + (L.grade === 'A+' ? ' parfait !' : L.grade === 'A' ? ' réussi' : L.grade === 'B' ? ' correct' : ' à revoir'), cx - 70, cy - 10);
+      ctx.font = '600 12px Barlow,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillText(L.detail, cx - 70, cy + 12);
+      if (L.combo >= 2) { ctx.textAlign = 'right'; ctx.font = '800 20px "Barlow Condensed",sans-serif'; ctx.fillStyle = '#ffd23f'; ctx.fillText('×' + L.combo, cx + 140, cy - 8); ctx.font = '600 10px Barlow,sans-serif'; ctx.fillText('COMBO', cx + 140, cy + 12); }
+      ctx.restore();
     }
     // événements météo en cours ou annoncés
     {

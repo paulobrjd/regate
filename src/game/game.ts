@@ -54,6 +54,10 @@ export interface GameOpts {
   collisions?: boolean;
   /** Événements météo pendant la course (par défaut oui). */
   events?: boolean;
+  /** Durée du pré-départ (s). */
+  pre?: number;
+  /** Équilibrage : coup de pouce aux bateaux à la traîne (0 aucun, 1 léger, 2 fort). */
+  balance?: number;
   assist?: Assist;
   name?: string;
   col?: string;
@@ -63,6 +67,9 @@ export interface GameOpts {
   pace?: number;
   /** En ligne : place sur la ligne, chrono de course donné par le serveur, heure du serveur (ms). */
   slot?: { i: number; n: number };
+  /** En ligne : nombre de bots du salon (longueur de ligne identique chez tous) et couleurs déjà prises. */
+  netBots?: number;
+  takenCols?: string[];
   clock?: () => number;
   remoteClock?: () => number;
 }
@@ -124,12 +131,17 @@ export class Game {
   readonly remotes = new Map<string, Remote>();
   /** Enregistrement de la course pour le replay. */
   readonly rec = new Recorder();
+  readonly pre: number;
+  readonly balance: number;
+  /** Options de création (pour la revanche). */
+  readonly opts: GameOpts;
   /** Largeur de la zone de départ (m, de part et d'autre de l'axe). */
   private spread = 320;
   private obstacles: Obstacle[];
 
   constructor(o: GameOpts) {
     this.mode = o.mode;
+    this.opts = o;
     this.demo = !!o.demo;
     this.met = METEO[o.met ?? 1];
     this.seed = o.seed ?? Math.random() * 10;
@@ -137,7 +149,7 @@ export class Game {
     const vc = activateVenue(o.venue ?? 'baie');
     this.venue = vc.venue;
     {
-      const base = vc.courses.find(c => c.id === o.course) ?? vc.courses[0], nb = o.slot ? o.slot.n : Math.min(MAX_BOATS, (o.bots || 0) + 1), hw = lineHalf(nb);
+      const base = vc.courses.find(c => c.id === o.course) ?? vc.courses[0], nb = o.slot ? Math.min(MAX_BOATS, o.slot.n + (o.netBots ?? 0)) : Math.min(MAX_BOATS, (o.bots || 0) + 1), hw = lineHalf(nb);
       this.course = { ...base, pin: { x: -hw, y: 0 }, cmte: { x: hw, y: 0 } };
       this.spread = hw * 1.25;
     }
@@ -151,12 +163,14 @@ export class Game {
     this.sea = o.sea && SEAS[o.sea] ? o.sea : 'auto';
     this.collisions = o.collisions ?? true;
     setSwell(this.venue.swell ?? 0);
-    this.waveAmp = this.seaAmp(o.startT ?? -PRE);
+    this.pre = o.pre ?? PRE;
+    this.balance = o.balance ?? 0;
+    this.waveAmp = this.seaAmp(o.startT ?? -this.pre);
     this.sky = o.sky && o.sky !== 'auto' ? o.sky : (this.met.sky ?? 'soleil');
     this.cls = o.cls ?? IMOCA;
     this.cal = calibration(this.cls);
     this.assist = o.assist ?? ASSISTS.equipier.a;
-    this.t = o.startT ?? -PRE;
+    this.t = o.startT ?? -this.pre;
     this.pace = o.pace ?? 3;
     this.lastT = this.t - 1;
     this.wd = this.wind.dir(this.t);
@@ -172,7 +186,7 @@ export class Game {
         b.col = o.col || COLS[0]; b.name = o.name || 'Toi';
         if (o.demo) { b.ai = mkAI(L, x, rng, newMem()); b.perf = rrange(rng, ...L.perf); }
       } else {
-        b.col = COLS[i % COLS.length]; b.name = BOTS[(i - 1) % BOTS.length];
+        b.col = o.takenCols ? COLS.filter(c => !o.takenCols!.includes(c))[(i - 1) % Math.max(1, COLS.length - o.takenCols.length)] ?? COLS[i % COLS.length] : COLS[i % COLS.length]; b.name = BOTS[(i - 1) % BOTS.length];
         b.ai = mkAI(L, x, rng, newMem()); b.perf = rrange(rng, ...L.perf);
       }
       this.boats.push(b);
@@ -216,13 +230,14 @@ export class Game {
     if (!this.isMe(b)) return;
     switch (e) {
       case 'contactMark': this.say('Contact avec une bouée !', false); break;
-      case 'knockdown': this.say('Couché ! Le bateau s\'est couché sur l\'eau'); this.onSfx('capsize'); this.timeScale = 1; break;
+      case 'knockdown': this.combo = 0; this.say('Couché ! Le bateau s\'est couché sur l\'eau'); this.onSfx('capsize'); this.timeScale = 1; break;
       case 'recovered': this.say('Le bateau se redresse, repars !'); break;
-      case 'broach': this.say('Départ au lof ! Choque, prends un ris'); this.onSfx('gybeWild'); this.timeScale = 1; break;
+      case 'broach': this.combo = 0; this.say('Départ au lof ! Choque, prends un ris'); this.onSfx('gybeWild'); this.timeScale = 1; break;
       case 'crashGybe': this.say('Empannage sauvage ! Borde la GV avant d\'empanner'); this.onSfx('gybeWild'); this.timeScale = 1; break;
       case 'aground': this.say('Échoué ! Attends que le bateau se dégage'); this.onSfx('ground'); this.timeScale = 1; break;
       case 'refloat': this.say('Le bateau est dégagé'); break;
       case 'tack': case 'gybe': {
+        this.startManeuver(e);
         const a = this.assist;
         const todo = [!a.systems ? 'quille (K), foils (F), ballast (B)' : '', !a.sheets ? 'écoutes' : ''].filter(Boolean).join(', ');
         this.say((e === 'tack' ? 'Virement de bord' : 'Empannage') + (todo ? ' : pense à ' + todo : ''));
@@ -276,7 +291,9 @@ export class Game {
       if (!this.demo) { this.onSfx('gun'); this.say(this.me.ocs ? 'Départ anticipé ! Repasse sous la ligne' : 'Partez !'); }
     }
     this.lastT = t;
-    const rnow = this.remoteClock ? this.remoteClock() - 200 : 0; // on affiche les autres avec 200 ms de retard (interpolation)
+    const rnow = this.remoteClock ? this.remoteClock() - 200 : 0;
+    // bots d'un salon dont l'hôte est parti : ils ne sont plus mis à jour, on les retire
+    for (const [id, r] of this.remotes) if (id.startsWith('bot') && Date.now() - r.seen > 8000) this.removeRemote(id); // on affiche les autres avec 200 ms de retard (interpolation)
     for (const b of this.boats) {
       if (b.remote) { this.updateRemote(b, rnow, dt); continue; }
       let inp = NO_INPUT;
@@ -301,8 +318,9 @@ export class Game {
       this.progress(b);
     }
     this.collide();
+    this.balanceFleet(dt);
     if (!this.demo) this.rec.capture(this);
-    if (this.isMe(this.me)) this.coach(this.me, dt);
+    if (this.isMe(this.me)) { this.coach(this.me, dt); this.trackManeuver(dt); }
     this.autoSlow();
     if (this.demo && (this.boats.every(b => b.fin != null) || t > 1500)) this.over = true;
     if (!this.demo) this.announceEvents();
@@ -398,6 +416,83 @@ export class Game {
     }
   }
 
+  private balT = 0;
+  /**
+   * Équilibrage : les bateaux simulés ici (moi et mes bots) qui sont loin derrière la tête de course reçoivent
+   * un coup de pouce de poussée, qui grandit avec le retard (jusqu'à +5 % ou +10 %).
+   */
+  private balanceFleet(dt: number): void {
+    if (!this.balance || this.t < 0) return;
+    this.balT -= dt; if (this.balT > 0) return;
+    this.balT = 1;
+    const maxB = this.balance === 2 ? 0.1 : 0.05;
+    const racing = this.boats.filter(b => b.fin == null && !b.ocs);
+    if (racing.length < 2) { for (const b of this.boats) b.boost = 0; return; }
+    const lead = Math.min(...racing.map(b => this.remaining(b)));
+    for (const b of this.boats) {
+      if (b.remote) continue;
+      const gap = b.fin != null ? 0 : this.remaining(b) - lead;
+      const want = maxB * clamp((gap - 80) / 700, 0, 1);
+      b.boost += (want - b.boost) * 0.3;
+    }
+  }
+
+  // ---------- note de manœuvre ----------
+  /** Notes de mes manœuvres, combo en cours, meilleur combo, dernière note (affichée quelques secondes). */
+  maneuvers: { kind: 'tack' | 'gybe' | 'mark'; grade: string; loss: number; score: number }[] = [];
+  combo = 0; bestCombo = 0;
+  lastGrade: { kind: 'tack' | 'gybe' | 'mark'; grade: string; detail: string; combo: number; at: number } | null = null;
+  private vHist: number[] = []; private vT = 0;
+  private man: { kind: 'tack' | 'gybe'; t0: number; v0: number; vmin: number } | null = null;
+  private markMin = Infinity;
+
+  private startManeuver(kind: 'tack' | 'gybe'): void {
+    if (this.t < 0) return;
+    this.man = { kind, t0: this.t, v0: Math.max(0.5, ...this.vHist.slice(-20)), vmin: this.me.v };
+  }
+  /** Suivi à 4 Hz : vitesse, relance après manœuvre, distance à la bouée visée. */
+  private trackManeuver(dt: number): void {
+    const b = this.me;
+    this.vT -= dt; if (this.vT > 0) return; this.vT = 0.25;
+    this.vHist.push(b.v); if (this.vHist.length > 40) this.vHist.shift();
+    const m = b.leg >= 1 && b.leg <= this.course.marks.length ? this.course.marks[b.leg - 1] : null;
+    if (m && m.island == null) this.markMin = Math.min(this.markMin, Math.hypot(b.x - m.x, b.y - m.y));
+    const M = this.man; if (!M) return;
+    M.vmin = Math.min(M.vmin, b.v);
+    const el = this.t - M.t0;
+    if ((el > 4 && b.v >= 0.9 * M.v0) || el > 40) {
+      this.man = null;
+      const ratio = M.vmin / M.v0, score = M.kind === 'tack' ? ratio * 100 - el : ratio * 100 - el;
+      const cut = M.kind === 'tack' ? [45, 36, 26, 15] : [82, 70, 58, 40];
+      const loss = (M.v0 - M.vmin) / 0.514444;
+      this.grade(M.kind, score, cut, 'perdu ' + loss.toFixed(1).replace('.', ',') + ' nds · relancé en ' + Math.round(el) + ' s', loss);
+    }
+  }
+  /** Passage de bouée : noté sur la distance à la bouée (au plus près = au mieux) et la vitesse conservée. */
+  private gradeMark(): void {
+    const d = this.markMin; this.markMin = Infinity;
+    if (!isFinite(d)) return;
+    const keep = this.me.v / Math.max(0.5, ...this.vHist.slice(-40));
+    const score = 100 - Math.max(0, d - 20) * 1.2 - (1 - keep) * 60;
+    this.grade('mark', score, [85, 70, 52, 35], 'passée à ' + Math.round(d) + ' m', 0);
+  }
+  private grade(kind: 'tack' | 'gybe' | 'mark', score: number, cut: number[], detail: string, loss: number): void {
+    const grade = score >= cut[0] ? 'A+' : score >= cut[1] ? 'A' : score >= cut[2] ? 'B' : score >= cut[3] ? 'C' : 'D';
+    if (['A+', 'A', 'B'].includes(grade)) this.combo++; else this.combo = 0;
+    this.bestCombo = Math.max(this.bestCombo, this.combo);
+    this.maneuvers.push({ kind, grade, loss, score });
+    this.lastGrade = { kind, grade, detail, combo: this.combo, at: this.simT };
+  }
+
+  /** Bilan des manœuvres pour l'écran d'arrivée. */
+  maneuverSummary(): string {
+    const L = this.maneuvers; if (!L.length) return '';
+    const val: Record<string, number> = { 'A+': 4.3, A: 4, B: 3, C: 2, D: 1 }, avg = L.reduce((a, m) => a + val[m.grade], 0) / L.length;
+    const mean = avg >= 4.15 ? 'A+' : avg >= 3.5 ? 'A' : avg >= 2.5 ? 'B' : avg >= 1.5 ? 'C' : 'D';
+    const n = (k: string) => L.filter(m => m.kind === k).length;
+    return 'Manœuvres : ' + L.length + ' (' + n('tack') + ' virements, ' + n('gybe') + ' empannages, ' + n('mark') + ' bouées) · note moyenne ' + mean + ' · meilleur combo ×' + this.bestCombo + ' · ' + L.filter(m => m.grade === 'A+').length + ' A+';
+  }
+
   /** Nombre de contacts entre bateaux (tests). */
   contacts = 0;
   contactLog: { t: number; x: number; y: number; a: number; b: number }[] = [];
@@ -454,7 +549,7 @@ export class Game {
       const m = c.marks[b.leg - 1];
       if (crossesRay(m, p, q)) {
         b.leg++;
-        if (me) { this.onSfx('mark'); this.say(b.leg > N ? 'Dernier bord : cap sur l\'arrivée !' : m.name + ' passée ! Cap sur : ' + c.marks[b.leg - 1].name); }
+        if (me) { this.gradeMark(); this.onSfx('mark'); this.say(b.leg > N ? 'Dernier bord : cap sur l\'arrivée !' : m.name + ' passée ! Cap sur : ' + c.marks[b.leg - 1].name); }
       }
     } else if (onLine && b.y > b.py) {
       b.fin = t; b.leg = N + 2;
@@ -480,7 +575,7 @@ export class Game {
           if (this.simT > (this.pairT.get(key) ?? -1e9)) { this.contacts++; this.contactLog.push({ t: this.t, x: a.x, y: a.y, a: a.id, b: b.id }); }
           this.pairT.set(key, this.simT + 3);
           if ((a === this.me || b === this.me) && !this.demo && this.simT > this.lastContact + 4) {
-            this.lastContact = this.simT;
+            this.lastContact = this.simT; this.combo = 0;
             const gw = giveWay(a, b, this.wd, this.course), other = a === this.me ? b : a;
             this.say(gw.who === this.me ? 'Contact ! C\'était à toi de t\'écarter : ' + REASON_TXT[gw.why] : 'Contact ! ' + other.name + ' devait s\'écarter : ' + REASON_TXT[gw.why]);
           }
@@ -504,9 +599,11 @@ export class Game {
     this.boats.splice(this.boats.indexOf(r.b), 1); this.remotes.delete(id);
   }
   /** Positions reçues du serveur (t : heure du serveur). */
-  pushStates(t: number, boats: { id: string; s: number[]; fin: number | null }[], myId: string): void {
+  pushStates(t: number, boats: { id: string; s: number[]; fin: number | null; n?: string; c?: string }[], myId: string, iAmBotHost = false): void {
     for (const st of boats) {
       if (st.id === myId) continue;
+      if (st.id.startsWith('bot') && iAmBotHost) continue; // mes propres bots sont simulés ici
+      if (st.id.startsWith('bot') && !this.remotes.has(st.id)) this.addRemote(st.id, st.n ?? 'Bot', st.c ?? '#ffffff');
       const r = this.remotes.get(st.id); if (!r) continue;
       r.buf.push({ t, s: st.s }); if (r.buf.length > 30) r.buf.shift();
       r.seen = Date.now();

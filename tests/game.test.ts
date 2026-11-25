@@ -127,3 +127,27 @@ describe('règles de course et évitement', () => {
     expect(msgs.some(m => m.includes('Tribord'))).toBe(true);
   });
 });
+
+describe('pré-départ, équilibrage, note de manœuvre', () => {
+  it('pré-départ de 30 s, 1 min ou 2 min', () => {
+    for (const pre of [30, 60, 120]) expect(new Game({ mode: 'solo', seed: 1, bots: 0, pre }).t).toBe(-pre);
+  });
+  it('équilibrage : le bateau à la traîne reçoit un coup de pouce, pas le premier', () => {
+    const g = new Game({ mode: 'solo', seed: 4, bots: 3, balance: 2, course: 'triangle' });
+    for (let i = 0; i < 90 / STEP; i++) g.update(STEP, NO_INPUT);
+    g.me.y += 900; g.me.iy = g.me.y; // je prends 900 m de retard
+    for (let i = 0; i < 15 / STEP; i++) g.update(STEP, NO_INPUT);
+    const lead = g.boats.reduce((a, b) => g.remaining(b) < g.remaining(a) ? b : a);
+    expect(g.me.boost).toBeGreaterThan(0.05);
+    expect(lead.boost).toBeLessThan(0.01);
+  });
+  it('chaque virement est noté, le combo monte et le bilan s\'affiche', () => {
+    const g = new Game({ mode: 'solo', seed: 3, bots: 0, course: 'banane', assist: { sheets: true, systems: true, sails: true, helm: true, safe: true } });
+    g.command('route');
+    for (let i = 0; i < 900 / STEP && g.me.fin == null; i++) { if (!g.routeAuto) g.command('route'); g.update(STEP, NO_INPUT); }
+    expect(g.maneuvers.length).toBeGreaterThan(2);
+    expect(g.maneuvers.every(m => ['A+', 'A', 'B', 'C', 'D'].includes(m.grade))).toBe(true);
+    expect(g.maneuvers.some(m => m.kind === 'mark')).toBe(true);
+    expect(g.maneuverSummary()).toMatch(/Manœuvres : \d+/);
+  }, 60000);
+});

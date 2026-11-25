@@ -25,7 +25,7 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     const [venue, course] = OPEN_COURSES[openTurn++ % OPEN_COURSES.length], rnd = Math.random();
     const met = rnd < 0.2 ? 0 : rnd < 0.65 ? 1 : rnd < 0.85 ? 2 : 4;
     const sky = ['auto', 'auto', 'soleil', 'couchant', 'nuageux', 'nuit'][Math.floor(Math.random() * 6)];
-    return { venue, course, met, sky, pace: 3, sea: 'auto', collisions: true, events: true };
+    return { venue, course, met, sky, pace: 3, sea: 'auto', collisions: true, events: true, pre: 60, balance: 1, bots: 0 };
   };
   rooms.set(OPEN_CODE, { code: OPEN_CODE, public: true, permanent: true, name: 'Le Grand Large', host: null, phase: 'lobby', players: new Map(),
     settings: openSettings(), seed: 0, gunAt: 0, firstFin: 0, autoAt: 0 });
@@ -55,6 +55,8 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
   const raceTime = r => (Date.now() - r.gunAt) * r.settings.pace / 1000;
   const results = r => {
     const L = [...r.players.values()].map(p => ({ id: p.id, name: p.name, col: p.col, fin: p.fin, leg: p.leg, d: p.d, ocs: p.ocs }));
+    // bots (simulés par l'hôte des bots)
+    for (const b of r.botStates || []) L.push({ id: 'bot' + b.i, name: String(b.n).slice(0, 14), col: String(b.c).slice(0, 9), fin: b.fin, leg: b.leg | 0, d: Number(b.d) || 1e9, ocs: false, bot: true });
     L.sort((a, b) => (a.fin != null) !== (b.fin != null) ? (a.fin != null ? -1 : 1) : a.fin != null ? a.fin - b.fin : (b.leg - a.leg) || (a.d - b.d));
     return L;
   };
@@ -85,11 +87,11 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
     c.room = r;
     broadcast(r, roomInfo(r));
     // course déjà lancée : le nouveau venu la rejoint en route (il part de la ligne)
-    if (r.phase === 'race') send(c.ws, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players, late: true });
+    if (r.phase === 'race') send(c.ws, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players, late: true, botHost: r.botHost });
   }
   function create(c, isPublic) {
     const r = { code: code(), public: !!isPublic, name: 'Salon de ' + c.name, host: c.id, phase: 'lobby', players: new Map(),
-      settings: { venue: 'baie', course: 'sprint', met: 1, sky: 'auto', pace: 3, sea: 'auto', collisions: true }, seed: 0, gunAt: 0, firstFin: 0 };
+      settings: { venue: 'baie', course: 'sprint', met: 1, sky: 'auto', pace: 3, sea: 'auto', collisions: true, events: true, pre: 60, balance: 0, bots: 0 }, seed: 0, gunAt: 0, firstFin: 0 };
     rooms.set(r.code, r); log(`salon ${r.code} créé par ${c.name}`);
     joinRoom(c, r);
   }
@@ -102,9 +104,12 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
   }
   function startRace(r) {
     r.phase = 'race'; r.seed = Math.random() * 10; r.firstFin = 0; r.autoAt = 0;
-    r.gunAt = Date.now() + 4000 + PRE * 1000 / r.settings.pace;
+    // le Grand Large complète la flotte avec des bots quand on est peu ; un joueur (l'hôte des bots) les fait naviguer
+    if (r.permanent) r.settings = { ...r.settings, bots: Math.max(0, Math.min(5, 6 - r.players.size)) };
+    r.botHost = r.host && r.players.has(r.host) ? r.host : r.players.keys().next().value; r.botStates = [];
+    r.gunAt = Date.now() + 4000 + (r.settings.pre || PRE) * 1000 / r.settings.pace;
     for (const p of r.players.values()) { p.s = null; p.leg = 0; p.d = 1e9; p.fin = null; p.ocs = false; p.seen = Date.now(); }
-    broadcast(r, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players });
+    broadcast(r, { type: 'start', seed: r.seed, gunAt: r.gunAt, settings: r.settings, players: roomInfo(r).players, botHost: r.botHost });
     broadcast(r, roomInfo(r));
     log(`salon ${r.code} : départ (${r.players.size} joueurs)`);
   }
@@ -130,18 +135,23 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
             const s = m.settings, o = r.settings;
             r.settings = { venue: String(s.venue ?? o.venue).slice(0, 20), course: String(s.course ?? o.course).slice(0, 20), met: Math.max(0, Math.min(4, Number(s.met ?? o.met) | 0)),
               sky: String(s.sky ?? o.sky).slice(0, 12), pace: [1, 2, 3].includes(Number(s.pace)) ? Number(s.pace) : o.pace,
-              sea: ['auto', 'plate', 'belle', 'formee', 'grosse'].includes(s.sea) ? s.sea : o.sea, collisions: typeof s.collisions === 'boolean' ? s.collisions : o.collisions, events: typeof s.events === 'boolean' ? s.events : o.events !== false };
+              sea: ['auto', 'plate', 'belle', 'formee', 'grosse'].includes(s.sea) ? s.sea : o.sea, collisions: typeof s.collisions === 'boolean' ? s.collisions : o.collisions, events: typeof s.events === 'boolean' ? s.events : o.events !== false,
+              pre: [30, 60, 120].includes(Number(s.pre)) ? Number(s.pre) : (o.pre || 60), balance: [0, 1, 2].includes(Number(s.balance)) ? Number(s.balance) : (o.balance || 0),
+              bots: Math.max(0, Math.min(14, Number(s.bots ?? o.bots ?? 0) | 0)) };
             broadcast(r, roomInfo(r));
           }
           break;
         case 'start':
           // partie ouverte : n'importe qui peut donner le départ sans attendre
           if (r && (r.host === c.id || r.permanent) && r.phase === 'lobby') startRace(r);
+          // revanche de l'hôte (salon privé) alors que d'autres naviguent encore : on clôt et on relance
+          else if (r && r.host === c.id && !r.permanent && r.phase === 'race' && r.players.get(c.id)?.fin != null) { endRace(r); startRace(r); }
           break;
         case 'state':
           if (r && r.phase === 'race') {
             const p = r.players.get(c.id); if (!p || !Array.isArray(m.s) || m.s.length > 40) break;
             p.s = m.s.map(Number); p.leg = Number(m.leg) | 0; p.d = Number(m.d) || 0; p.ocs = !!m.ocs; p.seen = Date.now();
+            if (c.id === r.botHost && Array.isArray(m.bots)) r.botStates = m.bots.slice(0, 14).filter(b => Array.isArray(b.s) && b.s.length <= 40).map(b => ({ i: b.i | 0, n: b.n, c: b.c, s: b.s.map(Number), fin: b.fin == null ? null : Number(b.fin), leg: b.leg | 0, d: Number(b.d) || 0 }));
           }
           break;
         case 'abort':
@@ -174,6 +184,8 @@ export function startServer({ port = Number(process.env.PORT) || 8080, dist = re
       }
       if (r.phase !== 'race') continue;
       const boats = [...r.players.values()].filter(p => p.s).map(p => ({ id: p.id, s: p.s, fin: p.fin }));
+      // les bots ne bougent que tant que leur hôte est là
+      if (r.players.has(r.botHost)) for (const b of r.botStates || []) boats.push({ id: 'bot' + b.i, s: b.s, fin: b.fin, n: b.n, c: b.c });
       broadcast(r, { type: 'states', t: Date.now(), boats });
       // 10 minutes réelles après le premier arrivé, ou 3 heures de course : on clôt
       // fin : 10 min après le premier arrivé, 3 h de course, ou plus personne ne navigue depuis 2 min

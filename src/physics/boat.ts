@@ -33,6 +33,8 @@ export interface Boat {
   remote?: boolean;
   /** Mode indulgent : pas de départ au lof, de chavirage ni d'empannage sauvage. */
   safe: boolean;
+  /** Coup de pouce d'équilibrage (0 = aucun, 0.1 = +10 % de poussée). */
+  boost: number;
   /** Facteur de performance (IA : habileté de l'équipage virtuel). */
   perf: number;
   // incidents (s restantes)
@@ -82,7 +84,7 @@ export function mkBoat(cls: BoatClass, o: Partial<Boat>): Boat {
     mainSheet: 0.4, trav: 0.5, headSheet: 0.5,
     head: 0, reefs: 0, task: null,
     keel: 0, keelT: 0, foilP: 0, foilS: 0, foilPT: 0, foilST: 0, ballP: 0, ballS: 0, ballPT: 0, ballST: 0,
-    energy: 1, safe: false, pilot: { on: false, mode: 'vent', set: 90 * D }, perf: 1,
+    energy: 1, boost: 0, safe: false, pilot: { on: false, mode: 'vent', set: 90 * D }, perf: 1,
     broach: 0, knock: 0, aground: 0, capT: 0,
     tws: 12, twsAvg: 0, twa: 90 * D, awa: 60 * D, aws: 15, tack: 1, lastTack: 1,
     target: 0, heelEq: 0, depower: 0, depT: 0, ideal: { mainSheet: 0.3, trav: 1, headSheet: 0.5 }, eff: 1, headPow: 1, mainPow: 1, foilLift: 0,
@@ -311,7 +313,7 @@ export function stepBoat(b: Boat, dt: number, inp: BoatInput, env: StepEnv): voi
 
   // --- vitesse ---
   const mass = (cls.mass + cls.ballastMax * (b.ballP + b.ballS)) * 1.15;
-  const eta = etaAt(env.cal, b.tws, twaDeg) * b.perf * (b.broach > 0 ? 0.35 : 1);
+  const eta = etaAt(env.cal, b.tws, twaDeg) * b.perf * (1 + b.boost) * (b.broach > 0 ? 0.35 : 1);
   const v = b.v, rudDrag = 0.5 * RHO_WATER * v * Math.abs(v) * cls.rudArea * (0.006 + 1.2 * b.rud * b.rud);
   const fx = Math.sin(b.h), fy = -Math.cos(b.h);
   const slope = (env.wave(b.x + fx * 8, b.y + fy * 8) - env.wave(b.x - fx * 8, b.y - fy * 8)) / 16;

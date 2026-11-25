@@ -116,3 +116,21 @@ describe('partie ouverte « Le Grand Large »', () => {
     c.ws.close();
   }, 20000);
 });
+
+describe('bots dans un salon', () => {
+  it('l\'hôte fait naviguer les bots : leurs positions et arrivées sont relayées à tout le monde', async () => {
+    const a = await client('Hôte'), b = await client('Pote');
+    a.send({ type: 'create', public: false }); const r = await a.wait('room');
+    b.send({ type: 'join', code: r.code }); await a.wait('room', m => m.players.length === 2);
+    a.send({ type: 'settings', settings: { bots: 3, pre: 30 } }); await b.wait('room', m => m.settings.bots === 3 && m.settings.pre === 30);
+    a.send({ type: 'start' });
+    const sa = await a.wait('start'), sb = await b.wait('start');
+    expect(sa.botHost).toBe(sb.botHost); expect(sa.settings.bots).toBe(3);
+    const host = sa.botHost === r.players[0].id ? a : b;
+    host.send({ type: 'state', s: [1, 2, 0, 5], leg: 1, d: 900, bots: [1, 2, 3].map(i => ({ i, n: 'Bot' + i, c: '#fff', s: [i * 10, 0, 0, 5], fin: null, leg: 1, d: 1000 + i })) });
+    const st = await b.wait('states', m => m.boats.filter((x: any) => x.id.startsWith('bot')).length === 3);
+    expect(st.boats.find((x: any) => x.id === 'bot2').n).toBe('Bot2');
+    a.close(); b.close();
+  }, 20000);
+});
+

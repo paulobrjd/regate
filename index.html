@@ -75,6 +75,12 @@
           <label class="field">Mer
             <select id="sea"><option value="auto">Selon la météo</option><option value="plate">Mer plate</option><option value="belle">Belle mer</option><option value="formee">Mer formée</option><option value="grosse">Grosse mer</option></select>
           </label>
+          <label class="field">Pré-départ
+            <select id="pre"><option value="30">30 s</option><option value="60" selected>1 min</option><option value="120">2 min</option></select>
+          </label>
+          <label class="field">Équilibrage
+            <select id="balance"><option value="0">Aucun</option><option value="1" selected>Léger</option><option value="2">Fort</option></select>
+          </label>
           <label class="field">Rythme
             <select id="pace"><option value="3" selected>Arcade (rapide)</option><option value="2">Dynamique</option><option value="1">Réaliste (temps réel)</option></select>
           </label>
@@ -111,6 +117,9 @@
             <label class="field">Météo<select id="nMet"><option value="0">Petit temps</option><option value="1">Medium</option><option value="2">Brise</option><option value="3">Gros temps</option><option value="4">Variable · grains</option></select></label>
             <label class="field">Ciel<select id="nSky"><option value="auto">Selon la météo</option><option value="soleil">Grand soleil</option><option value="nuageux">Nuageux</option><option value="pluie">Pluie</option><option value="brume">Brume</option><option value="couchant">Coucher de soleil</option><option value="nuit">Nuit</option></select></label>
             <label class="field">Mer<select id="nSea"><option value="auto">Selon la météo</option><option value="plate">Mer plate</option><option value="belle">Belle mer</option><option value="formee">Mer formée</option><option value="grosse">Grosse mer</option></select></label>
+            <label class="field">Pré-départ<select id="nPre"><option value="30">30 s</option><option value="60" selected>1 min</option><option value="120">2 min</option></select></label>
+            <label class="field">Équilibrage<select id="nBalance"><option value="0">Aucun</option><option value="1" selected>Léger</option><option value="2">Fort</option></select></label>
+            <label class="field">Bots<select id="nBots2"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="13">13</option><option value="14">14</option></select></label>
             <label class="field">Rythme<select id="nPace"><option value="3">Arcade</option><option value="2">Dynamique</option><option value="1">Réaliste</option></select></label>
           </div>
           <label class="chk"><input type="checkbox" id="nNoColl"> Sans collision</label>
@@ -128,9 +137,11 @@
       <h2 id="endTitle">Arrivée !</h2>
       <div class="big" id="endTime">0:00.0</div>
       <p id="endBest" class="note"></p>
+      <p id="endMan" class="note"></p>
       <ol class="rank" id="endRank"></ol>
       <div class="row">
-        <button class="go" id="againBtn">Nouvelle régate</button>
+        <button class="go" id="rematchBtn">↻ Revanche</button>
+        <button class="opt" id="againBtn">Nouvelle régate</button>
         <button class="opt" id="replayBtn">▶ Revoir la course</button>
         <button class="opt" id="menuBtn">Menu</button>
       </div>

@@ -1,7 +1,7 @@
 // Point d'entrée : menus, entrées clavier/tactile, boucle à pas fixe (60 Hz) + rendu interpolé, accélération du temps.
 import './style.css';
 import { fmt, ord } from './util/math';
-import { Game, PRE, STEP, TIME_SCALES, type Command } from './game/game';
+import { Game, PRE, STEP, TIME_SCALES, snapOf, type Command } from './game/game';
 import { VENUES, activateVenue } from './game/venue';
 import { ASSISTS } from './game/assist';
 import { Canvas2D, ZOOMS } from './render/canvas2d';
@@ -40,7 +40,7 @@ sel('assist').innerHTML = Object.entries(ASSISTS).map(([k, v]) => `<option value
 const prefs = (() => { try { return JSON.parse(localStorage.getItem('regate-prefs') || '{}'); } catch { return {}; } })();
 if (prefs.venue) sel('venue').value = prefs.venue;
 fillCourses();
-for (const k of ['course', 'met', 'nBots', 'lvl', 'assist', 'pace', 'sky', 'sea']) if (prefs[k] != null) sel(k).value = prefs[k];
+for (const k of ['course', 'met', 'nBots', 'lvl', 'assist', 'pace', 'sky', 'sea', 'pre', 'balance']) if (prefs[k] != null) sel(k).value = prefs[k];
 $<HTMLInputElement>('noColl').checked = !!prefs.noColl;
 $<HTMLInputElement>('events').checked = prefs.events !== false;
 if (!prefs.assist) sel('assist').value = 'debutant';
@@ -68,9 +68,9 @@ function demo(): void {
 }
 function startSolo(): void {
   unlockAudio();
-  const p = { events: $<HTMLInputElement>('events').checked, noColl: $<HTMLInputElement>('noColl').checked, sea: sel('sea').value, venue: sel('venue').value, sky: sel('sky').value, course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value, pace: sel('pace').value };
+  const p = { events: $<HTMLInputElement>('events').checked, noColl: $<HTMLInputElement>('noColl').checked, sea: sel('sea').value, venue: sel('venue').value, sky: sel('sky').value, course: sel('course').value, met: sel('met').value, nBots: sel('nBots').value, lvl: sel('lvl').value, assist: sel('assist').value, pace: sel('pace').value, pre: sel('pre').value, balance: sel('balance').value };
   try { localStorage.setItem('regate-prefs', JSON.stringify(p)); } catch { /* */ }
-  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, venue: p.venue, sky: p.sky, sea: p.sea, collisions: !p.noColl, events: p.events, course: p.course, assist: ASSISTS[p.assist].a, pace: +p.pace }));
+  start(new Game({ mode: 'solo', bots: +p.nBots, lvl: +p.lvl, met: +p.met, venue: p.venue, sky: p.sky, sea: p.sea, collisions: !p.noColl, events: p.events, course: p.course, assist: ASSISTS[p.assist].a, pace: +p.pace, pre: +p.pre, balance: +p.balance }));
   $('ovStart').hidden = true; $('ovEnd').hidden = true; $('resumeBtn').hidden = true;
 }
 function menu(): void {
@@ -89,6 +89,7 @@ function finishMe(): void {
 }
 function showEnd(g: Game): void {
   if (g.mode === 'net') { showNetEnd(g); return; }
+  $('rematchBtn').hidden = false;
   const t = g.me.fin!, st = g.standings(), pos = st.findIndex(e => e.me) + 1, id = g.venue.id + ':' + g.course.id;
   $('endTitle').textContent = pos === 1 && st.length > 1 ? 'Victoire !' : 'Arrivée !';
   $('endTime').textContent = fmt(t);
@@ -97,7 +98,8 @@ function showEnd(g: Game): void {
   line += rec ? (best === null ? 'Premier temps enregistré.' : 'Nouveau record ! Ancien : ' + fmt(best)) : 'Ton record : ' + fmt(best!);
   if (rec) { bests[id] = t; try { localStorage.setItem('regate-bests', JSON.stringify(bests)); } catch { /* */ } }
   $('endBest').textContent = line;
-  g.endShown = true; renderRank(); $('ovEnd').hidden = false; $('againBtn').focus();
+  $('endMan').textContent = g.maneuverSummary();
+  g.endShown = true; renderRank(); $('ovEnd').hidden = false; $('rematchBtn').focus();
 }
 // ---------- en ligne ----------
 let lastResults: ResultRow[] = [];
@@ -105,7 +107,9 @@ function startNet(m: StartMsg): void {
   unlockAudio();
   const players = m.players, i = Math.max(0, players.findIndex(p => p.id === net.id)), meP = players[i], st = m.settings;
   const clock = () => (net.serverNow() - m.gunAt) * st.pace / 1000;
-  const g = new Game({ mode: 'net', seed: m.seed, venue: st.venue, course: st.course, met: st.met, sky: st.sky, sea: st.sea, collisions: st.collisions !== false, events: st.events !== false, pace: st.pace, bots: 0,
+  const botHost = m.botHost === net.id, nBots = st.bots ?? 0;
+  myBotHost = botHost;
+  const g = new Game({ mode: 'net', seed: m.seed, netBots: nBots, takenCols: players.map(p => p.col), venue: st.venue, course: st.course, met: st.met, sky: st.sky, sea: st.sea, collisions: st.collisions !== false, events: st.events !== false, pre: st.pre ?? 60, balance: st.balance ?? 0, pace: st.pace, bots: botHost && !m.late ? nBots : 0, lvl: 1,
     name: meP?.name, col: meP?.col, assist: assistChoice(), slot: { i, n: players.length }, clock, remoteClock: () => net.serverNow(), startT: clock() });
   for (const p of players) if (p.id !== net.id) g.addRemote(p.id, p.name, p.col);
   lastResults = [];
@@ -118,8 +122,10 @@ function showNetEnd(g: Game): void {
   const pos = lastResults.findIndex(r => r.id === net.id) + 1;
   $('endTitle').textContent = pos === 1 && lastResults.length > 1 ? 'Victoire !' : 'Arrivée !';
   $('endTime').textContent = t != null ? fmt(t) : '—';
+  $('endMan').textContent = g.maneuverSummary();
   $('endBest').textContent = (pos ? ord(pos) + ' sur ' + lastResults.length + ' · ' : '') + g.course.name + ' · chrono officiel du serveur';
   $('againBtn').textContent = 'Retour au salon';
+  $('rematchBtn').hidden = !net.room || !!net.room.permanent || net.room.host !== net.id;
   g.endShown = true; renderRank(); $('ovEnd').hidden = false;
 }
 function renderNetRank(): void {
@@ -132,7 +138,8 @@ function renderNetRank(): void {
     c[3].textContent = e.fin != null ? fmt(e.fin) : e.ocs ? 'départ anticipé' : 'en course';
   });
 }
-net.onStates = (t, boats) => { const g = app.g; if (g && g.mode === 'net') g.pushStates(t, boats, net.id); };
+let myBotHost = false;
+net.onStates = (t, boats) => { const g = app.g; if (g && g.mode === 'net') g.pushStates(t, boats, net.id, myBotHost); };
 net.onResults = (list, final) => {
   lastResults = list;
   const g = app.g; if (!g || g.mode !== 'net') return;
@@ -146,7 +153,7 @@ const lobby = initLobby({ onStart: startNet, isRacing: () => !!app.g && app.g.mo
   net.onRoom = r => {
     prev(r);
     const g = app.g; if (!g || g.mode !== 'net' || !r) return;
-    for (const id of [...g.remotes.keys()]) if (!r.players.some(p => p.id === id)) g.removeRemote(id);
+    for (const id of [...g.remotes.keys()]) if (!id.startsWith('bot') && !r.players.some(p => p.id === id)) g.removeRemote(id);
     // un pote qui rejoint la course en route apparaît sur l'eau
     if (r.phase === 'race') for (const p of r.players) if (p.id !== net.id && !g.remotes.has(p.id)) { g.addRemote(p.id, p.name, p.col); g.say(p.name + ' rejoint la course'); }
   };
@@ -222,6 +229,13 @@ $('toOpen').addEventListener('click', e => { e.preventDefault(); tab(true); $('n
 $('tNet').addEventListener('click', () => tab(true));
 $('goBtn').addEventListener('click', startSolo);
 $('resumeBtn').addEventListener('click', resume);
+// revanche : même course, même météo, même graine (en salon : relance immédiate pour tout le monde)
+$('rematchBtn').addEventListener('click', () => {
+  const g = app.g; if (!g) return;
+  if (g.mode === 'net') { net.send({ type: 'start' }); return; }
+  unlockAudio(); start(new Game({ ...g.opts, seed: g.seed, startT: undefined }));
+  $('ovEnd').hidden = true; $('ovStart').hidden = true;
+});
 $('againBtn').addEventListener('click', () => {
   if (app.g && app.g.mode === 'net') { $('againBtn').textContent = 'Nouvelle régate'; menu(); tab(true); } else startSolo();
 });
@@ -415,7 +429,11 @@ function loop(now: number): void {
   // en ligne : ma position part au serveur 10 fois par seconde
   if (g && g.mode === 'net' && net.connected) {
     netSendT -= dt;
-    if (netSendT <= 0) { netSendT = 0.1; net.send({ type: 'state', s: g.snapshotMe(), leg: g.me.leg, d: Math.round(g.remaining(g.me)), ocs: g.me.ocs }); }
+    if (netSendT <= 0) {
+      netSendT = 0.1;
+      const bots = myBotHost ? g.boats.filter(b => b.ai && !b.remote).map(b => ({ i: b.id, n: b.name, c: b.col, s: snapOf(b), fin: b.fin, leg: b.leg, d: Math.round(g.remaining(b)) })) : undefined;
+      net.send({ type: 'state', s: g.snapshotMe(), leg: g.me.leg, d: Math.round(g.remaining(g.me)), ocs: g.me.ocs, bots });
+    }
   }
   updSound(app.g, app.g ? app.g.simT : 0, dt);
   hudT -= dt; if (hudT <= 0) { updateHud(app.g, renderRank); hudT = 0.1; $('timeBtn').firstChild!.textContent = 'Temps ×' + (app.g?.timeScale ?? 1); }
